@@ -1709,7 +1709,7 @@ def authentication_router() -> APIRouter:
                         select(orm.APIKey).filter(orm.APIKey.first_eight == first_eight[:8])
                     )
                 ).scalar()
-            elif "revoke:apikeys:self" in which_scopes:
+            elif "revoke:apikeys:self" in which_scopes: # made this in elif because the one above will be able to revoke itself anyway
                 try:
                     secret = bytes.fromhex(api_key)
                     hashed_secret = hashlib.sha256(secret).digest()
