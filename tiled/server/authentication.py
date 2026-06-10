@@ -568,6 +568,44 @@ async def check_scopes(
             ),
             headers=headers_for_401(request, security_scopes),
         )
+    
+async def check_scopes_with_or( #TODO change name
+    request: Request,
+    security_scopes: SecurityScopes,
+    scopes: set[str] = Depends(get_current_scopes),
+    settings: Settings = Depends(get_settings),
+) -> None:
+
+    if isinstance(settings.authenticator, ProxiedOIDCAuthenticator): #if the server is properly setup
+        if settings.authenticator.scopes: # checks is there a list of required scopes
+            for scope in scopes: # the scopes variable holds what we want at least one of
+                if scope in set(settings.authenticator.scopes):
+                    return
+   
+            raise HTTPException( # will go to this if no matching scope is found
+                status_code=HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "Not enough permissions. "
+                    f"Requires scopes {settings.authenticator.scopes}. "
+                    f"Request had scopes {list(scopes)}"
+                ),
+                headers=headers_for_401(request, security_scopes),
+            )
+
+    else: # for this else statement i'm matching having a separate path from check_scopes, but idk how necessary this is, perhaps would be better just to delete the first 2 if parts in the above segment
+        for scope in scopes: # the scopes variable holds what we want at least one of
+            if scope in set(settings.authenticator.scopes):
+                return
+   
+        raise HTTPException( # will go to this if no matching scope is found
+            status_code=HTTP_401_UNAUTHORIZED,
+            detail=(
+                "Not enough permissions. "
+                f"Requires scopes {settings.authenticator.scopes}. "
+                f"Request had scopes {list(scopes)}"
+            ),
+            headers=headers_for_401(request, security_scopes),
+        )
 
 
 async def get_current_principal_from_api_key(
@@ -752,6 +790,10 @@ async def get_current_principal(
         principal if not is_apikey_single_user else SingleUserPrincipal
     )
     return principal
+
+
+    
+    
 
 
 async def create_pending_session(db: AsyncSession):
@@ -1618,12 +1660,38 @@ def authentication_router() -> APIRouter:
             request, schemas.APIKey.from_orm(api_key_orm).model_dump()
         )
 
+
+# General notes: summaries of what doing during week and where are at - every Friday
+
+# TODO after implementing the dependency stuff: TODO Delete
+# look into PDB - to learn about pytest
+# make sure Docs changes to reflect scope
+# make sure you change all the names to the new scope name we put (may need to change again)
+# https://github.com/bluesky/tiled/pull/1406 run this proposed fix locally and see if it will work
+# fix bug https://github.com/bluesky/tiled/issues/1226
+    #   in tiled save metadata, then want to change metadata
+# https://github.com/bluesky/tiled/issues/1120
+    # JWT --> access token and refresh token. access token eventually expires. --> bug
+    # the comment in this was fixed
+# either do some authorization stuff or client caching stuff (Hishel stuff)
+    # try to setup HTTPX2 (for the client caching part). 
+    #  getting streaming to work (can reference Tiled)
+        # subclass something from hishel, and then can probably PR to hishel to add the streaming support to Hishel.
+        # in client, cache cache control and transport should be good
+    # want to work on HTTP core layer so changes to Tiled request
+
     @router.delete("/apikey")
     async def revoke_apikey(
         request: Request,
         first_eight: str,
         principal: Optional[schemas.Principal] = Depends(get_current_principal),
-        _=Security(check_scopes, scopes=["revoke:apikeys"]),
+        api_key: Optional[str] = Depends(get_api_key), # perhaps this needs to be found based on the first_eight for the efficiency in lookup thing
+        # is there a way to have scope block parameter or filed in the body 
+        # are there other ways to use scoopes then block the route entirely? --> unknown look into? --> inject as a dependency and use dependency to check if youre permitted to do what you want to do, which lets you use the same route instead of having the separate self route
+        # dependency function checking the scopes
+        _=Security(check_scopes_with_or, scopes=["revoke:apikeys", "revoke:apikeys:self"]), 
+        # so need a function with Depends with a new function that gets assigned to a variable. then use that variable to branch to determine api_key_orm
+        which_scopes = Depends(get_current_scopes),  # ended up doing this instead of making a new function becasue when i was writing the other function i was just basing it off of this function anyway, so eliminating the middle man basically. honestly this might have the same problem of just like accessing scopes in the main body 'cause that's basically what this is doing but in a differet variable.
         db_factory: Callable[[], Optional[AsyncSession]] = Depends(
             get_database_session_factory
         ),
@@ -1635,11 +1703,19 @@ def authentication_router() -> APIRouter:
         if principal is None:
             return None
         async with db_factory() as db:
-            api_key_orm = (
-                await db.execute(
-                    select(orm.APIKey).filter(orm.APIKey.first_eight == first_eight[:8])
-                )
-            ).scalar()
+            if "revoke:apikeys" in which_scopes:
+                api_key_orm = (
+                    await db.execute(
+                        select(orm.APIKey).filter(orm.APIKey.first_eight == first_eight[:8])
+                    )
+                ).scalar()
+            elif "revoke:apikeys:self" in which_scopes:
+                try:
+                    secret = bytes.fromhex(api_key)
+                    hashed_secret = hashlib.sha256(secret).digest()
+                except Exception:
+                    return None # todo perhaps shouldn't be return none and instead raise somethign with a message
+                api_key_orm = await lookup_valid_api_key(db, secret)
             if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
                 raise HTTPException(
                     404,
@@ -1648,6 +1724,68 @@ def authentication_router() -> APIRouter:
             await db.delete(api_key_orm)
             await db.commit()
         return Response(status_code=HTTP_204_NO_CONTENT)
+
+# # TODO here make this so can only revoke its own api key
+#     @router.delete("/apikey/self") #change this? or add somewhere?
+#     async def revoke_self_apikey( # want to delete this
+#         request: Request,
+#         #Add searching through first eight and then should compare to full API key to reduce how many we are seaching through
+#         api_key: Optional[str] = Depends(get_api_key),  #use something else not get_api_key_websocket --> get_api_key
+#         principal: Optional[schemas.Principal] = Depends(get_current_principal),
+#         _=Security(check_scopes, scopes=["revoke:self_revoke_apikeys"]),
+#         db_factory: Callable[[], Optional[AsyncSession]] = Depends(
+#             get_database_session_factory
+#         ),
+#     ):
+#         # issue with test with get_api_key_websocket: Authorization header must be formatted like 'Apikey SECRET' http://local-tiled-app/api/v1/auth/apikey/self
+#         """
+#         Revoke the current user's API key."""
+#         # TODO Permit filtering the fields of the response.
+#         request.state.endpoint = "auth"
+#         if principal is None:
+#             return None
+#         async with db_factory() as db:
+#             # TODO delete all below comments:
+#             #current thoughts: if api_key_orm has some type of attribute of what its own API key is, we can check if it matches here and include it in the error if not.
+#             # we see that there is an orm.apikey, but it seems like that is of all the api keys. there is also a 
+#             # .first_eight, so maybe we uese orm.apikey for ALL and not just .first_eight. Then there's also regular
+#             # first_eight which is passed in as a parameter. but the fact that there is a [:8] makes me thing it's the full API key
+#             # ok nvm on that, but api_key: Optional[str] = Depends(get_api_key_websocket), looks promising
+#             # authenticate_websocket_first_message uses message.get("api_key") to get the api key... 
+#             # api_key is also api_key: Optional[str] = Depends(get_api_key_websocket), in router.py but
+#             # message is gotten as message = await websocket.receive_json(). I think that api_key: Optional[str] = Depends(get_api_key_websocket)
+#             # is good tbh.
+#             # I think issue now is that api_key_orm isn't the key so it shouldn't be api_key_orm != api_key)
+#             # api_key_orm is probably hashed, whereas api_key is raw, so we need to hash api_key I think
+            
+#             # The below try except is from get_access_tags_from_api_key
+#             try:
+#                 secret = bytes.fromhex(api_key)
+#                 hashed_secret = hashlib.sha256(secret).digest()
+#             except Exception:
+#                 return None # todo perhaps shouldn't be return none and instead raise somethign with a message
+#             api_key_orm = await lookup_valid_api_key(db, secret)
+#             # lookup_valid_api_key might make the check in if statment with hashed secret unnecessary since it would return None without a match
+#             # to the current API key, but here for now anyway
+
+#             # so I think the above would deal with the hashing issue. Now need to figure out what come after the dot with api_key_orm
+#             # looks like api_key_orm has hashed_secret, so perhaps comparing that with hashed_secret will work
+            
+#             if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
+#                 raise HTTPException(
+#                     404,
+#                     f"The provided API key is not that of the currently-authenticated {principal.type}.",
+#                 )
+#             await db.delete(api_key_orm)
+#             await db.commit()
+#         return Response(status_code=HTTP_204_NO_CONTENT)
+
+
+
+
+
+
+
 
     @router.get(
         "/whoami",

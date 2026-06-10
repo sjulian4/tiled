@@ -21,7 +21,7 @@ depends_on = None
 ROLES = ["admin", "user"]
 OLD_TO_NEW_SCOPES = {
     "create": ["create:node"],
-    "apikeys": ["revoke:apikeys", "create:apikeys"],
+    "apikeys": ["revoke:apikeys", "create:apikeys"], # TODO double check this I think we would want to switch to revoke:self_revoke_apikeys?
 }
 NEW_TO_OLD_SCOPES = {
     "create:node": ["create"],

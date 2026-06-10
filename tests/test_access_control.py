@@ -71,6 +71,7 @@ access_tag_config = {
                 "delete:revision",
                 "create:node",
                 "register",
+                "revoke:self_revoke_apikeys",
             ]
         },
     },
@@ -194,6 +195,14 @@ access_tag_config = {
                 },
             ],
         },
+        "self_revoke_tag": { #TODO delete
+            "users": [
+                {
+                    "name": "alice",
+                    "scopes": ["revoke:self_revoke_apikeys"],
+                },
+            ],
+        }
     },
 }
 

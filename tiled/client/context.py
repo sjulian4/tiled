@@ -82,7 +82,7 @@ def identity_provider_input(
         except IndexError:
             print(f"Choice must be a number 1 through {len(providers)}.")
             continue
-        break
+        break 
     return spec
 
 
@@ -913,6 +913,41 @@ class Context:
                         },
                     )
                 )
+
+# TODO added this
+
+    def revoke_self_api_key(self): # keep this
+        """
+        Revoke the current user's API key.
+
+        The API key must belong to the currently-authenticated user or service.
+        Users with administrative scopes may use ``Context.admin.revoke_api_key`` TODO Change
+        to revoke API keys belonging to other users.
+
+        Parameters
+        ----------
+        first_eight : str
+            Identify the API key to be deleted by passing its first 8 characters.
+            (Any additional characters passed will be truncated.)
+        """
+
+        # Should call revoke_api_key instead like self.revoke_api_key
+
+        # url_path = self.server_info.authentication.links.apikey
+
+        self.revoke_api_key(self.api_key[:8]) # make sure the self.api_key actually does what i want it to do
+
+        # for attempt in retry_context(self):
+        #     with attempt:
+        #         handle_error(
+        #             self.http_client.delete(
+        #                 url_path,
+        #                 headers={"x-csrf": self.http_client.cookies["tiled_csrf"]},
+        #                 params={
+        #                     **parse_qs(urlparse(url_path).query),
+        #                 },
+        #             )
+        #         )
 
     @property
     def app(self):

@@ -529,7 +529,6 @@ def build_app(
 
     async def startup_event():
         from .. import __version__
-
         logger.info(f"Tiled version {__version__}")
         # Validate the single-user API key.
         settings: Settings = app.dependency_overrides[get_settings]()
