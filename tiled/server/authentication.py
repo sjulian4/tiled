@@ -436,6 +436,17 @@ async def get_current_scopes(
     else:
         return PUBLIC_SCOPES if settings.allow_anonymous_access else NO_SCOPES
 
+async def get_current_scopes_revoke(
+    which_scopes = Depends(get_current_scopes), 
+):  
+    if "revoke:apikeys" in which_scopes:
+        return "full_revoke_power"
+    elif "revoke:apikeys:self" in which_scopes: 
+        return "self_revoke_power"
+    else:
+        return None
+    
+    
 
 async def get_current_scopes_websocket(
     websocket: WebSocket,
@@ -594,7 +605,7 @@ async def check_scopes_with_or( #TODO change name
 
     else: # for this else statement i'm matching having a separate path from check_scopes, but idk how necessary this is, perhaps would be better just to delete the first 2 if parts in the above segment
         for scope in scopes: # the scopes variable holds what we want at least one of
-            if scope in set(settings.authenticator.scopes):
+            if scope in set(security_scopes.scopes):
                 return
    
         raise HTTPException( # will go to this if no matching scope is found
@@ -1668,6 +1679,7 @@ def authentication_router() -> APIRouter:
 # make sure Docs changes to reflect scope
 # make sure you change all the names to the new scope name we put (may need to change again)
 # https://github.com/bluesky/tiled/pull/1406 run this proposed fix locally and see if it will work
+# figure out why those fails are happening locally for main branch (adapters plus others)
 # fix bug https://github.com/bluesky/tiled/issues/1226
     #   in tiled save metadata, then want to change metadata
 # https://github.com/bluesky/tiled/issues/1120
@@ -1691,7 +1703,7 @@ def authentication_router() -> APIRouter:
         # dependency function checking the scopes
         _=Security(check_scopes_with_or, scopes=["revoke:apikeys", "revoke:apikeys:self"]), 
         # so need a function with Depends with a new function that gets assigned to a variable. then use that variable to branch to determine api_key_orm
-        which_scopes = Depends(get_current_scopes),  # ended up doing this instead of making a new function becasue when i was writing the other function i was just basing it off of this function anyway, so eliminating the middle man basically. honestly this might have the same problem of just like accessing scopes in the main body 'cause that's basically what this is doing but in a differet variable.
+        which_scopes = Depends(get_current_scopes_revoke), 
         db_factory: Callable[[], Optional[AsyncSession]] = Depends(
             get_database_session_factory
         ),
@@ -1703,24 +1715,42 @@ def authentication_router() -> APIRouter:
         if principal is None:
             return None
         async with db_factory() as db:
-            if "revoke:apikeys" in which_scopes:
+            api_key_orm = None 
+            if which_scopes == "full_revoke_power":
                 api_key_orm = (
                     await db.execute(
                         select(orm.APIKey).filter(orm.APIKey.first_eight == first_eight[:8])
                     )
                 ).scalar()
-            elif "revoke:apikeys:self" in which_scopes: # made this in elif because the one above will be able to revoke itself anyway
-                try:
-                    secret = bytes.fromhex(api_key)
-                    hashed_secret = hashlib.sha256(secret).digest()
-                except Exception:
-                    return None # todo perhaps shouldn't be return none and instead raise somethign with a message
-                api_key_orm = await lookup_valid_api_key(db, secret)
-            if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
-                raise HTTPException(
-                    404,
-                    f"The currently-authenticated {principal.type} has no such API key.",
-                )
+                if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
+                    raise HTTPException(
+                        404,
+                        f"The currently-authenticated {principal.type} has no such API key.",
+                    )
+            elif which_scopes == "self_revoke_power": 
+                # There is an issue in this branch where if the APIKEY has the self revoke scope, it will enter this branch and delete itself even if it asked to delete a different key. To fix, make sure that it deletes what it requests by comparing the values of first_eight and api_key.
+                #However, even if we do this check what if those first eights match? there was the assuming unique thing, but perhaps to avoid all that we can do something else. for now, this is written with the uniqueness assumption
+                if(first_eight[:8] == api_key[:8]): #this sees if it is trying to revoke itself or some other key that happens to have the self revoke power. without this, it woudl revoke itself even if it was intended to revoke just a separate key that it didn't have the scope for
+                    try:
+                        secret = bytes.fromhex(api_key)
+                    except Exception:
+                        return None # todo perhaps shouldn't be return none and instead raise somethign with a message
+                    api_key_orm = await lookup_valid_api_key(db, secret)
+                    if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
+                        raise HTTPException(
+                            404,
+                            f"The currently-authenticated {principal.type} has no such API key.",
+                        )
+                else: # This else statement is reached in the event that the APIKEY has a self revoke scope but is trying to revoke an API that is not itself, which it is unauthorized to do
+                    raise HTTPException( # will go to this if no matching scope is found
+                        status_code=HTTP_401_UNAUTHORIZED,
+                        detail=(
+                            "Not enough permissions. "
+                            f"Requires scope revoke:apikeys. "
+                        )
+                    )
+                
+            
             await db.delete(api_key_orm)
             await db.commit()
         return Response(status_code=HTTP_204_NO_CONTENT)

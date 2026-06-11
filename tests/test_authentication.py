@@ -728,8 +728,8 @@ def test_unallowed_api_key_self_revoked(enter_username_password, config):
             context.authenticate()
 
         # this makes an API key that the user can login with
-        api_key = context.create_api_key(scopes=["revoke:self_revoke_apikeys"]) # make so this shouldn't have regular revoke scope
-        second_api_key = context.create_api_key(scopes=["revoke:self_revoke_apikeys"]) 
+        api_key = context.create_api_key(scopes=["revoke:apikeys:self"]) # make so this shouldn't have regular revoke scope
+        second_api_key = context.create_api_key(scopes=["revoke:apikeys:self"]) 
         # logs in with api key and revokes
         
     with Context.from_app(build_app_from_config(config), api_key = api_key["secret"]) as api_context:

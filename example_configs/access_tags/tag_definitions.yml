@@ -1,11 +1,11 @@
 roles:
   facility_user:
-    scopes: ["read:data", "read:metadata", "revoke:self_revoke_apikeys"] #TODO restore
+    scopes: ["read:data", "read:metadata", "revoke:apikeys:self"] #TODO restore
   facility_admin:
     scopes: ["read:data", "read:metadata",
              "write:data", "write:metadata",
              "delete:node", "delete:revision",
-             "create:node", "register", revoke:self_revoke_apikeys]
+             "create:node", "register", revoke:apikeys:self]
 tags:
   data_A:
     groups:
@@ -32,7 +32,7 @@ tags:
   data_E: #TODO Delete
     auto_tags:
       - name: alice
-        scopes: ["read:data", "read:metadata", "revoke:self_revoke_apikeys"]
+        scopes: ["read:data", "read:metadata", "revoke:apikeys:self"]
   data_admin:
     users:
       - name: cara

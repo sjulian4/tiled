@@ -25,7 +25,7 @@ access_control:
     - "delete:node"
     - "create:node"
     - "register"
-    - "revoke:self_revoke_apikeys" #TODO delete?
+    - "revoke:apikeys:self" #TODO delete?
     tags_db:
       uri: "file:example_configs/access_tags/compiled_tags.sqlite"
     access_tags_parser: "tiled.access_control.access_tags:AccessTagsParser"
