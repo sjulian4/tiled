@@ -158,8 +158,9 @@ Commands:
   create
   list
   revoke
+  revoke_self
 ```
-
+<!-- TODO idk if above is right way to write that -->
 We can see the key that we made above in the list.
 
 ```

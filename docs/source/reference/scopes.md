@@ -15,7 +15,7 @@ with restricted scopes.
 * `delete:node` --- Delete a node
 * `create:apikeys` --- Create API keys for the currently-authenticated user or service.
 * `revoke:apikeys` --- Revoke API keys for the currently-authenticated user or service.
-* `revoke:apikeys:self` --- Revoke API key that is currently used for authorization.
+* `revoke:apikeys:self` --- Revoke API key that is currently used for authorization beloning.
 * `metrics` --- Access Prometheus metrics.
 * `admin:apikeys` --- Manage API keys on behalf of any user or service.
 * `read:principals` --- Read list of all users and services and their attributes.
@@ -30,6 +30,7 @@ An authenticated entity ("Principal") may be assigned roles that confer a list
 of scopes.
 
 * `user` --- default role, granted scopes `["read:metadata", "read:data", "write:metadata", "write:data", "create:node", "create:apikeys", "revoke:apikeys"]`
+<!-- TODO change above to revoke:apikeys:self possibly? -->
 * `admin` --- granted all scopes
 
 There is support for custom roles at the database level, but neither role

@@ -1722,11 +1722,6 @@ def authentication_router() -> APIRouter:
                         select(orm.APIKey).filter(orm.APIKey.first_eight == first_eight[:8])
                     )
                 ).scalar()
-                if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
-                    raise HTTPException(
-                        404,
-                        f"The currently-authenticated {principal.type} has no such API key.",
-                    )
             elif which_scopes == "self_revoke_power": 
                 # There is an issue in this branch where if the APIKEY has the self revoke scope, it will enter this branch and delete itself even if it asked to delete a different key. To fix, make sure that it deletes what it requests by comparing the values of first_eight and api_key.
                 #However, even if we do this check what if those first eights match? there was the assuming unique thing, but perhaps to avoid all that we can do something else. for now, this is written with the uniqueness assumption
@@ -1736,11 +1731,7 @@ def authentication_router() -> APIRouter:
                     except Exception:
                         return None # todo perhaps shouldn't be return none and instead raise somethign with a message
                     api_key_orm = await lookup_valid_api_key(db, secret)
-                    if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
-                        raise HTTPException(
-                            404,
-                            f"The currently-authenticated {principal.type} has no such API key.",
-                        )
+
                 else: # This else statement is reached in the event that the APIKEY has a self revoke scope but is trying to revoke an API that is not itself, which it is unauthorized to do
                     raise HTTPException( # will go to this if no matching scope is found
                         status_code=HTTP_401_UNAUTHORIZED,
@@ -1749,6 +1740,11 @@ def authentication_router() -> APIRouter:
                             f"Requires scope revoke:apikeys. "
                         )
                     )
+            if (api_key_orm is None) or (api_key_orm.principal.uuid != principal.uuid):
+                raise HTTPException(
+                    404,
+                    f"The currently-authenticated {principal.type} has no such API key.",
+                )
                 
             
             await db.delete(api_key_orm)
