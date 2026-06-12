@@ -610,7 +610,7 @@ class BaseClient:
         else:
             if not isinstance(metadata, dict):
                 raise ValueError(
-                    f"Metadata must be of type dict, not of type {type(metadata)}. "
+                    f"Metadata must be of type dict, not of type {type(metadata)}."
                 )
             md_copy = deepcopy(self._item["attributes"]["metadata"])
             metadata_patch = jsonpatch.JsonPatch.from_diff(
