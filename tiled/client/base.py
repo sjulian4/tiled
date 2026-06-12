@@ -525,8 +525,6 @@ class BaseClient:
         >>> md['unwanted_key'] = DELETE_KEY
         >>> node.update_metadata(metadata=md)  # Update the copy on the server
         """
-
-
         metadata_patch, specs_patch, access_blob_patch = self.build_metadata_patches(
             metadata=metadata,
             specs=specs,

@@ -6,6 +6,8 @@ Write the date in place of the "Unreleased" in the case a new version is release
 
 ## Unreleased
 
+
+
 ### Added
 
 - Rich progress bar shown during multi-chunk array, dataframe, and dataset
@@ -16,6 +18,10 @@ Write the date in place of the "Unreleased" in the case a new version is release
   for any tiled client request (connection failures, 5xx errors, 429 rate limits).
   The spinner is animated in Jupyter notebooks as well as TTY terminals.
 - Respect the `Retry-After` header on HTTP 429 (Too Many Requests) responses.
+
+### Fixed
+
+- Ensuring that the metadata parameter value entered when calling update_metadata is of the proper type before altering the metadata.
 
 
 ## v0.2.11 (2026-05-27)
