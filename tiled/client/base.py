@@ -526,11 +526,6 @@ class BaseClient:
         >>> node.update_metadata(metadata=md)  # Update the copy on the server
         """
 
-        if (metadata is not None) and (not isinstance(metadata, dict)):
-            raise ValueError(
-                f"Unsupported metadata type {type(metadata)}. "
-                f"Acceptable values are of type dict."
-            )
 
         metadata_patch, specs_patch, access_blob_patch = self.build_metadata_patches(
             metadata=metadata,
@@ -611,10 +606,14 @@ class BaseClient:
         >>> md['unwanted_key'] = DELETE_KEY
         >>> node.build_metadata_patches(metadata=md)  # Generate the patch
         """
-
+        
         if metadata is None:
             metadata_patch = []
         else:
+            if not isinstance(metadata, dict):
+                raise ValueError(
+                    f"Metadata must be of type dict, not of type {type(metadata)}. "
+                )
             md_copy = deepcopy(self._item["attributes"]["metadata"])
             metadata_patch = jsonpatch.JsonPatch.from_diff(
                 self._item["attributes"]["metadata"],
