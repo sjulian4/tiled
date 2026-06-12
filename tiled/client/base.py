@@ -604,7 +604,7 @@ class BaseClient:
         >>> md['unwanted_key'] = DELETE_KEY
         >>> node.build_metadata_patches(metadata=md)  # Generate the patch
         """
-        
+
         if metadata is None:
             metadata_patch = []
         else:
