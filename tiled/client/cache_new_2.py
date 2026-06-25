@@ -50,14 +50,14 @@ def measure_entry_size(request, response, stream_size=0):
     elif stream_size is None:
         raise Exception
     else:
-        size = len(stream_size)
+        size = stream_size
 
     if hasattr(request, "_content"):
         size += len(request.content)
     elif stream_size is None:
         raise Exception
     else:
-        size += len(stream_size)
+        size += stream_size
     return size
 
 
@@ -276,7 +276,7 @@ class TiledCache(SyncSqliteStorage):
         with closing(self.connection.cursor()) as cursor:
             (stream_size,) = cursor.execute(
                 "SELECT SUM(LENGTH(chunk_data)) FROM streams WHERE entry_id = ?",
-                (parent_entry.id.bytes),
+                (parent_entry.id.bytes,),
             ).fetchone()  # adds all the lengths together in bytes from blob
             stream_size = stream_size or 0
 
@@ -372,13 +372,19 @@ class TiledCache(SyncSqliteStorage):
         with closing(self.connection.cursor()) as cursor:
             entries = []
             for entry in parent_entries:
-                entry.extra["time_last_accessed"] = datetime.now().timestamp()
-                entries.append(entry)
+                extra = {
+                    "encoding": entry.extra["encoding"],
+                    "size": entry.extra["size"],
+                    "time_last_accessed": datetime.now().timestamp(),
+                }
+                updated_entry = Entry(id=entry.id, request=entry.request, meta=entry.meta, response=entry.response, cache_key=entry.cache_key, extra=extra)
+                entries.append(updated_entry)
                 # above deals with the returned entries list, below deals with the table
                 cursor.execute(
                     "UPDATE entries SET time_last_accessed = ? WHERE id = ?",
                     (datetime.now().timestamp(), entry.id.bytes),
                 )
+                self.connection.commit()
             return entries
 
     # Deleted _remove_entry and remove_entry because the parent already does it.
@@ -401,7 +407,7 @@ class TiledCache(SyncSqliteStorage):
         :type new_entry: tp.Union[Entry, tp.Callable[[Entry], Entry]]
 
         """
-        if self._connection is None or not self._setup_completed:
+        if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         if self.readonly:
             raise RuntimeError("Cannot update entries in read-only cache")
@@ -433,7 +439,6 @@ class TiledCache(SyncSqliteStorage):
 
     # deleted update_entry here. same potential issue with setup as mentioned for previous functions
 
-    # TODO: what do we do with this?
     def _remove_expired_caches(self) -> None:
         """Remove all expired entries from the cache."""
         if self.connection is None or not self._setup_completed:
