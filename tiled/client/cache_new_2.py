@@ -117,7 +117,9 @@ class TiledCache(SyncSqliteStorage):
                 # The methods in the Cache storage object will not try to write when
                 # in readonly mode. For extra safety, we open a readonly connection
                 # to the database, so that SQLite itself will prohibit writing.
-                database = f"file:{self._filepath}?ro" if self._readonly else self._filepath
+                database = (
+                    f"file:{self._filepath}?ro" if self._readonly else self._filepath
+                )
                 self.connection = sqlite3.connect(
                     database, uri=self._readonly, check_same_thread=False
                 )
@@ -127,7 +129,7 @@ class TiledCache(SyncSqliteStorage):
             tables = [row[0] for row in cursor.fetchall()]
             if not tables:
                 # We have an empty database
-                self._ensure_connection() # self._ensure_connection will automatically initialize databse once ensuring it is connected
+                self._ensure_connection()  # self._ensure_connection will automatically initialize databse once ensuring it is connected
             elif "tiled_http_response_cache_version" not in tables:
                 # We have a non-empty database that we do not recognize.
                 raise RuntimeError(
@@ -149,10 +151,8 @@ class TiledCache(SyncSqliteStorage):
                     )
                     self._ensure_connection()
             cursor.close()
-            self._setup_completed = True # but parent also has self._initialized to chceck so todo find a way to use that
+            self._setup_completed = True  # but parent also has self._initialized to chceck so todo find a way to use that
 
-
-    # TODO: make this so it's overriding and calling self. didn't make any modifications yet.
     def _initialize_database(self) -> None:
         super()._initialize_database()
         with closing(self.connection.cursor()) as cursor:
@@ -175,9 +175,6 @@ class TiledCache(SyncSqliteStorage):
             )
 
             self.connection.commit()
-            # self._setup_completed = True TODO: add to a new function where also considers non-empty database at start??? like if table exists then it'll set this to true, otherwise its false and it calls initialize_database? Mayhaps?
-
-    # TODO: we may need a function dealing with a nonempty database in addition to the initialize_database b/c that was account for before in _setup()
 
     def __repr__(self):
         module = type(self).__module__
@@ -254,19 +251,15 @@ class TiledCache(SyncSqliteStorage):
     ) -> Entry:
         """
         Store an entry in the cache.
-        TODO fix
-        :param key: The key which identifies the entry in the cache
-        :type key: str
-        :param response: An HTTP response
-        :type response: httpcore.Response
+
         :param request: An HTTP request
         :type request: httpcore.Request
-        :param metadata: Additional information about the stored response
-        :type metadata: Metadata
-        :param response_content: Provide if the response does not yet have content, defaults to None
-        :type response_content: tp.Optional[bytes], optional
-        :param request_content: Provide if the request does not yet have content, defaults to None
-        :type request_content: tp.Optional[bytes], optional
+        :param response: An HTTP response
+        :type response: httpcore.Response
+        :param key: The key which identifies the entry in the cache
+        :type key: str
+        :param id_: The UUID identifying the entry
+        :type id_: UUID
 
         """
 
@@ -296,10 +289,10 @@ class TiledCache(SyncSqliteStorage):
                 )
                 return
 
-        # Now that the parent was called, account for the additional table entries.
-        # We can modify the Entry object to have the other data values stored in "extra" so then at least
-        # the Entry object would have that information, however, so at least its there if we want to access it through that
-        # we would also need to updated the actual table in SQL though
+            # Now that the parent was called, account for the additional table entries.
+            # We can modify the Entry object to have the other data values stored in "extra" so then at least
+            # the Entry object would have that information, however, so at least its there if we want to access it through that
+            # we would also need to updated the actual table in SQL though
 
             (total_size,) = cursor.execute("SELECT SUM(size) FROM entries").fetchone()
             total_size = total_size or 0  # If empty, total_size is None
@@ -365,12 +358,12 @@ class TiledCache(SyncSqliteStorage):
         # TODO like the other functions, may need to consider the setup aspect
         if not self._setup_completed:
             self._setup()
-        
+
         parent_entries = super().get_entries(key=key)
 
         if not parent_entries:
             logger.debug(f"Cache miss: {key}")  # or info?
-            return [] #TODO: is this the best thing to return?
+            return []  # TODO: is this the best thing to return?
         else:
             logger.debug(f"Cache hit: {key}")  # or info?
 
@@ -400,22 +393,13 @@ class TiledCache(SyncSqliteStorage):
         new_entry: tp.Union[Entry, tp.Callable[[Entry], Entry]],
     ) -> tp.Optional[Entry]:
         """
-        Updates the metadata of the stored response.
-        TODO: fix
-        :param key: The key which identifies the entry in the cache
-        :type key: str
-        :param response: An HTTP response
-        :type response: httpcore.Response
-        :param request: An HTTP request
-        :type request: httpcore.Request
-        :param metadata: Additional information about the stored response
-        :type metadata: Metadata
-        :param response_content: Provide if the response does not yet have content, defaults to None
-        :type response_content: tp.Optional[bytes], optional
-        :param request_content: Provide if the request does not yet have content, defaults to None
-        :type request_content: tp.Optional[bytes], optional
+        Updates the Entry of the stored data.
 
-        This method was heavily inspired from Hishel's own implementation.
+        :param id: The UUID which identifies the entry in the cache
+        :type id: UUID
+        :param new_entry: The new Entry that we will be updating to.
+        :type new_entry: tp.Union[Entry, tp.Callable[[Entry], Entry]]
+
         """
         if self._connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
