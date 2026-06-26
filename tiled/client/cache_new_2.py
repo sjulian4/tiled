@@ -1,4 +1,3 @@
-import enum
 import os
 import sqlite3
 import sys
@@ -61,18 +60,6 @@ def measure_entry_size(request, response, stream_size=0):
     return size
 
 
-class ThreadingMode(enum.IntEnum):
-    """
-    Threading mode used in the sqlite3 package.
-
-    https://docs.python.org/3/library/sqlite3.html#sqlite3.threadsafety
-    """
-
-    SINGLE_THREAD = 0
-    MULTI_THREAD = 1
-    SERIALIZED = 3
-
-
 class TiledCache(SyncSqliteStorage):
     def __init__(
         self,
@@ -84,7 +71,6 @@ class TiledCache(SyncSqliteStorage):
         readonly=False,
     ) -> None:
         # ttl is in seconds, capacity and max_item_size are in bytes
-        # TODO: removed self._lock since parent has its own, but different type of lock: SerializableLock vs. RLock
 
         self._setup_completed: bool = False
 
@@ -97,6 +83,7 @@ class TiledCache(SyncSqliteStorage):
             # TODO Consider defaulting to a temporary database, with a warning,
             # if TILED_CACHE_DIR points to a networked filesystem. Unless perhaps
             # flock() support can be checked (nfs version, or lock manager, etc).
+            # Ask Nate if this is something we should look into
             filepath = TILED_CACHE_DIR / "http_response_cache.db"
         self._filepath = filepath
         self._capacity = None
@@ -107,10 +94,14 @@ class TiledCache(SyncSqliteStorage):
 
         super().__init__(
             connection=connection, database_path=filepath, default_ttl=ttl
-        )  # TODO: what to do about refresh_ttl_on_access
+        )
 
         self._setup()
 
+    # This may seem redundant because of the _initialized boolean value in the parent, however I think
+    # that this is still necessary in case a bug happens where it gets initialized in the parent but not here.
+    # If this happens, the tables won't have all the columns it needs and it can be a problem. So, we have to check
+    # if our database got initialized here. 
     def _setup(self) -> None:
         if not self._setup_completed:
             if not self.connection:
@@ -129,7 +120,7 @@ class TiledCache(SyncSqliteStorage):
             tables = [row[0] for row in cursor.fetchall()]
             if not tables:
                 # We have an empty database
-                self._ensure_connection()  # self._ensure_connection will automatically initialize databse once ensuring it is connected
+                self._initialize_database() 
             elif "tiled_http_response_cache_version" not in tables:
                 # We have a non-empty database that we do not recognize.
                 raise RuntimeError(
@@ -149,19 +140,18 @@ class TiledCache(SyncSqliteStorage):
                     self.connection = sqlite3.connect(
                         self._filepath, check_same_thread=False
                     )
-                    self._ensure_connection()
+                    self._initialize_database() 
             cursor.close()
-            self._setup_completed = True  # but parent also has self._initialized to chceck so todo find a way to use that
+            self._setup_completed = True  # but parent also has self._initialized to check so todo potentially find a way to use that
 
     def _initialize_database(self) -> None:
-        super()._initialize_database()
+        self._ensure_connection() # using this instead of super initialize database becasue it automatically initializes the database if it isn't already and has an additional check for the connection
         with closing(self.connection.cursor()) as cursor:
             # add the additioanl columns here
             # FORMAT:
             # cursor.execute("ALTER TABLE {table_name} ADD COLUMN {variable_name} INTEGER")
             #  Missing from new: body, is_stream(separate table?), encode (perhaps just default to ascii on everything?, size, time_last_accessed)
             # below might be an issue if those columns already exist
-            cursor.execute("ALTER TABLE entries ADD COLUMN encoding TEXT")
             cursor.execute("ALTER TABLE entries ADD COLUMN size INTEGER")
             cursor.execute("ALTER TABLE entries ADD COLUMN time_last_accessed INTEGER")
 
@@ -268,7 +258,10 @@ class TiledCache(SyncSqliteStorage):
         if self.readonly:
             raise RuntimeError("Cannot store new entries in read-only cache")
 
-        # TODO: this might be an iissue because it begins to make the table before checking the size
+        # this might be an issue because it begins to make the table before checking the size
+        # Rn the solution to this is to check the size after and if it is too large, delete the entry.
+        # However, depending on how the cache is setup, could it be an issue for it to add when it's full 
+        # even if it immediately would delete? Ask Nate
         parent_entry = super().create_entry(
             request=request, response=response, key=key, id_=id_
         )
@@ -306,7 +299,6 @@ class TiledCache(SyncSqliteStorage):
                 total_size -= size
 
             extra = {
-                "encoding": "ascii",
                 "size": incoming_size,
                 "time_last_accessed": datetime.now().timestamp(),
             }
@@ -318,15 +310,15 @@ class TiledCache(SyncSqliteStorage):
                 cache_key=parent_entry.cache_key,
                 extra=extra,
             )
-            # TODO: deleted number_of_uses from below, may need to find a way to put back
-            #   TODO  Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
-            # fine to add them, just need an aditional thing in Tiled to hangle them beyond pack and unpack. so --> can keep all
+            # Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
+            # fine to add them, just need an aditional thing in Tiled to handle them beyond pack and unpack. so --> can keep all
+            # ask Nate about the encoding part
 
             # the entries will just be Null to start with since parent didn't set them, so just have to update
             cursor.execute(
-                "UPDATE entries SET encoding = ?, size = ?, time_last_accessed = ? WHERE id = ?",
+                "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
                 ("ascii", incoming_size, datetime.now().timestamp(), entry.id.bytes),
-            )  # #entry.id.bytes uses the UUID to find the right entry, converting to BLOB
+            )  # entry.id.bytes uses the UUID to find the right entry, converting to BLOB
 
             # TODO: do we also need to deal with the stream table here?
             self.connection.commit()
@@ -354,8 +346,6 @@ class TiledCache(SyncSqliteStorage):
         :return: An HTTP response and its HTTP request.
         :rtype: tp.Optional[StoredResponse]
         """
-        # TODO: see if hishel has its own cache miss and hit loggers
-        # TODO like the other functions, may need to consider the setup aspect
         if not self._setup_completed:
             self._setup()
 
@@ -363,7 +353,7 @@ class TiledCache(SyncSqliteStorage):
 
         if not parent_entries:
             logger.debug(f"Cache miss: {key}")  # or info?
-            return []  # TODO: is this the best thing to return?
+            return []  # is this the best thing to return? I feel like if it comes back empty its obviously a miss that the user can use (plus the log is there). ask Nate
         else:
             logger.debug(f"Cache hit: {key}")  # or info?
 
@@ -373,11 +363,17 @@ class TiledCache(SyncSqliteStorage):
             entries = []
             for entry in parent_entries:
                 extra = {
-                    "encoding": entry.extra["encoding"],
                     "size": entry.extra["size"],
                     "time_last_accessed": datetime.now().timestamp(),
                 }
-                updated_entry = Entry(id=entry.id, request=entry.request, meta=entry.meta, response=entry.response, cache_key=entry.cache_key, extra=extra)
+                updated_entry = Entry(
+                    id=entry.id,
+                    request=entry.request,
+                    meta=entry.meta,
+                    response=entry.response,
+                    cache_key=entry.cache_key,
+                    extra=extra,
+                )
                 entries.append(updated_entry)
                 # above deals with the returned entries list, below deals with the table
                 cursor.execute(
@@ -388,8 +384,8 @@ class TiledCache(SyncSqliteStorage):
             return entries
 
     # Deleted _remove_entry and remove_entry because the parent already does it.
-    # TODO HOWEVER, may need to add it back for the sake of checking if the
-    # cache was setup, depends on what we want to do with that.
+    # HOWEVER, may need to add it back for the sake of checking if the
+    # cache was setup, depends on what we want to do with that. I think ask Nate for thoughts
 
     # need to call the parent and then also update the extra table fields
     # perhaps change to call _create_entry?
@@ -422,12 +418,11 @@ class TiledCache(SyncSqliteStorage):
         # That being said, I think we should grab what is in the "extra" of the completed_entry
         # and update our table with that
         with self._lock:
-            connection = self._ensure_connection()
+            connection = self._ensure_connection() #todo I think there would be a bug here with if we were to remove the setup check because then the database wouldn't be initialized, so it will only initialiize in the parent and then not add the additional columns that we do here 
             cursor = connection.cursor()
             cursor.execute(
-                "UPDATE entries SET encoding = ?, size = ?, time_last_accessed = ? WHERE id = ?",
+                "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
                 (
-                    completed_entry.extra["encoding"],
                     completed_entry.extra["size"],
                     completed_entry.extra["time_last_accessed"],
                     id.bytes,
@@ -454,7 +449,6 @@ class TiledCache(SyncSqliteStorage):
             )
             self.connection.commit()
 
-    # leave as is?
     def clear(self):
         """Drop all entries from HTTP response cache."""
         if self.connection is None or not self._setup_completed:
@@ -465,7 +459,6 @@ class TiledCache(SyncSqliteStorage):
             cursor.execute("DELETE FROM entries")
             self.connection.commit()
 
-    # leave as is?
     def size(self):
         """
         Size of response bodies in cache in bytes.
@@ -478,7 +471,6 @@ class TiledCache(SyncSqliteStorage):
             (total_size,) = cursor.execute("SELECT SUM(size) FROM entries").fetchone()
         return total_size or 0  # if empty, total_size is None
 
-    # leave as is?
     def count(self):
         """Number of responses cached."""
         if self.connection is None or not self._setup_completed:
