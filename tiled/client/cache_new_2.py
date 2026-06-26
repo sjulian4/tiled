@@ -39,7 +39,7 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
     return f"{method}|{url}|{body_hashed}"  # so the cache key is based on the request
     # so i'm thinking the idea after this is that this cache key is used in Hishel 'cause it overrides the hishel key generation
 
-
+# TODO: need to fix this, returns 0 for size also need to check if stream is working
 def measure_entry_size(request, response, stream_size=0):
     # httpcore exception that is == httpx.ResponseNotRead()
     # Trace out the way this works for a streaming response
@@ -80,6 +80,9 @@ class TiledCache(SyncSqliteStorage):
             TILED_CACHE_DIR = Path(
                 os.getenv("TILED_CACHE_DIR", platformdirs.user_cache_dir("tiled"))
             )
+            # if(TILED_CACHE_DIR points to networked file system){
+            #     TILED_CACHE_DIR = Path(tempfile.mkdtemp())
+            # }
             # TODO Consider defaulting to a temporary database, with a warning,
             # if TILED_CACHE_DIR points to a networked filesystem. Unless perhaps
             # flock() support can be checked (nfs version, or lock manager, etc).
@@ -87,8 +90,8 @@ class TiledCache(SyncSqliteStorage):
             filepath = TILED_CACHE_DIR / "http_response_cache.db"
         self._filepath = filepath
         self._capacity = None
+        self._max_item_size = None 
         self.capacity = capacity
-        self._max_item_size = None
         self.max_item_size = max_item_size
         self._readonly = readonly  # unique to tiled
 
@@ -97,6 +100,8 @@ class TiledCache(SyncSqliteStorage):
         )
 
         self._setup()
+
+
 
     # This may seem redundant because of the _initialized boolean value in the parent, however I think
     # that this is still necessary in case a bug happens where it gets initialized in the parent but not here.
@@ -118,9 +123,12 @@ class TiledCache(SyncSqliteStorage):
                 "SELECT name FROM sqlite_master WHERE type='table';"
             )
             tables = [row[0] for row in cursor.fetchall()]
+
             if not tables:
                 # We have an empty database
                 self._initialize_database() 
+                self._initialized = True
+
             elif "tiled_http_response_cache_version" not in tables:
                 # We have a non-empty database that we do not recognize.
                 raise RuntimeError(
@@ -141,11 +149,13 @@ class TiledCache(SyncSqliteStorage):
                         self._filepath, check_same_thread=False
                     )
                     self._initialize_database() 
+                    self._initialized = True
+
             cursor.close()
-            self._setup_completed = True  # but parent also has self._initialized to check so todo potentially find a way to use that
+            self._setup_completed = True
 
     def _initialize_database(self) -> None:
-        self._ensure_connection() # using this instead of super initialize database becasue it automatically initializes the database if it isn't already and has an additional check for the connection
+        super()._initialize_database() 
         with closing(self.connection.cursor()) as cursor:
             # add the additioanl columns here
             # FORMAT:
@@ -207,7 +217,7 @@ class TiledCache(SyncSqliteStorage):
     def capacity(self, capacity):
         if capacity < 1:
             raise ValueError("Cache capacity cannot be less than 1 byte")
-        elif self.max_item_size and capacity < self.max_item_size:
+        elif self._max_item_size and capacity < self._max_item_size:
             raise ValueError("Cache capacity cannot be less than allowed entry size")
         self._capacity = capacity
 
@@ -264,7 +274,7 @@ class TiledCache(SyncSqliteStorage):
         # even if it immediately would delete? Ask Nate
         parent_entry = super().create_entry(
             request=request, response=response, key=key, id_=id_
-        )
+        ) # this should handle the stream table
 
         with closing(self.connection.cursor()) as cursor:
             (stream_size,) = cursor.execute(
@@ -283,9 +293,6 @@ class TiledCache(SyncSqliteStorage):
                 return
 
             # Now that the parent was called, account for the additional table entries.
-            # We can modify the Entry object to have the other data values stored in "extra" so then at least
-            # the Entry object would have that information, however, so at least its there if we want to access it through that
-            # we would also need to updated the actual table in SQL though
 
             (total_size,) = cursor.execute("SELECT SUM(size) FROM entries").fetchone()
             total_size = total_size or 0  # If empty, total_size is None
@@ -298,17 +305,12 @@ class TiledCache(SyncSqliteStorage):
                 cursor.execute("DELETE FROM entries WHERE id = ?", [entry_id])
                 total_size -= size
 
-            extra = {
-                "size": incoming_size,
-                "time_last_accessed": datetime.now().timestamp(),
-            }
             entry = Entry(
                 id=parent_entry.id,
                 request=parent_entry.request,
                 response=parent_entry.response,
                 meta=parent_entry.meta,
                 cache_key=parent_entry.cache_key,
-                extra=extra,
             )
             # Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
             # fine to add them, just need an aditional thing in Tiled to handle them beyond pack and unpack. so --> can keep all
@@ -317,10 +319,9 @@ class TiledCache(SyncSqliteStorage):
             # the entries will just be Null to start with since parent didn't set them, so just have to update
             cursor.execute(
                 "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
-                ("ascii", incoming_size, datetime.now().timestamp(), entry.id.bytes),
+                (incoming_size, datetime.now().timestamp(), entry.id.bytes),
             )  # entry.id.bytes uses the UUID to find the right entry, converting to BLOB
 
-            # TODO: do we also need to deal with the stream table here?
             self.connection.commit()
             return entry
 
@@ -362,17 +363,12 @@ class TiledCache(SyncSqliteStorage):
         with closing(self.connection.cursor()) as cursor:
             entries = []
             for entry in parent_entries:
-                extra = {
-                    "size": entry.extra["size"],
-                    "time_last_accessed": datetime.now().timestamp(),
-                }
                 updated_entry = Entry(
                     id=entry.id,
                     request=entry.request,
                     meta=entry.meta,
                     response=entry.response,
                     cache_key=entry.cache_key,
-                    extra=extra,
                 )
                 entries.append(updated_entry)
                 # above deals with the returned entries list, below deals with the table
@@ -387,7 +383,6 @@ class TiledCache(SyncSqliteStorage):
     # HOWEVER, may need to add it back for the sake of checking if the
     # cache was setup, depends on what we want to do with that. I think ask Nate for thoughts
 
-    # need to call the parent and then also update the extra table fields
     # perhaps change to call _create_entry?
     def _update_entry(
         self,
@@ -408,23 +403,16 @@ class TiledCache(SyncSqliteStorage):
         if self.readonly:
             raise RuntimeError("Cannot update entries in read-only cache")
 
-        completed_entry = super().update_entry(id=id, new_entry=new_entry)
+        completed_entry = super().update_entry(id=id, new_pair=new_entry)
         # note for understanding, in the parent update_entry, the "data" is the Entry object
-
-        # Since we put in the new "data" in the parent update_entry, we might need to just take it
-        # out again so that the "extras" field is correct. Actually, the entry object is being passed as a parameter,
-        # so we might not need to deal with that and can assume it has the proper values when it is passed in. I think that
-        # is the best bet.
-        # That being said, I think we should grab what is in the "extra" of the completed_entry
-        # and update our table with that
+        # TODO: find new way to get size and time_last_accessed and update here if needed?
         with self._lock:
-            connection = self._ensure_connection() #todo I think there would be a bug here with if we were to remove the setup check because then the database wouldn't be initialized, so it will only initialiize in the parent and then not add the additional columns that we do here 
+            connection = self._ensure_connection() # Note: I think there would be a bug here with if we were to remove the setup check because then the database wouldn't be initialized, so it will only initialiize in the parent and then not add the additional columns that we do here 
             cursor = connection.cursor()
             cursor.execute(
-                "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
+                "UPDATE entries SET time_last_accessed = ? WHERE id = ?",
                 (
-                    completed_entry.extra["size"],
-                    completed_entry.extra["time_last_accessed"],
+                    datetime.now().timestamp(),
                     id.bytes,
                 ),
             )
@@ -444,7 +432,7 @@ class TiledCache(SyncSqliteStorage):
             return
         with closing(self.connection.cursor()) as cursor:
             cursor.execute(
-                "DELETE FROM entries WHERE time_created + ? < ?",
+                "DELETE FROM entries WHERE created_at + ? < ?",
                 [self.default_ttl, datetime.now().timestamp()],
             )
             self.connection.commit()
@@ -489,3 +477,4 @@ class TiledCache(SyncSqliteStorage):
 # transport = hishel.CacheTransport(transport=httpx.HTTPTransport(), storage=tiled_cache)
 # This transport is how hishel is used, and it plugs in our TiledCache
 ###
+# TODO: figure out how to test and test this.
