@@ -40,6 +40,7 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
     # so i'm thinking the idea after this is that this cache key is used in Hishel 'cause it overrides the hishel key generation
 
 # TODO, test to see if handling streams right
+# i'm very suspicious of this function... but at least it's not returning 0 anymore
 def measure_entry_size(request, response, stream_size=0):
     # httpcore exception that is == httpx.ResponseNotRead()
     # Trace out the way this works for a streaming response
@@ -277,7 +278,6 @@ class TiledCache(SyncSqliteStorage):
 
         with closing(self.connection.cursor()) as cursor:
 
-            # TODO I think there is an issue with this with the size for Hishel's side
             parent_entry = super().create_entry(
                 request=request, response=response, key=key, id_=id_
             ) # this should handle the stream table
@@ -293,10 +293,12 @@ class TiledCache(SyncSqliteStorage):
 
             if incoming_size > self.max_item_size:
                     super().remove_entry(parent_entry.id)
-                    logger.debug(
-                        f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)"
-                    )
-                    return
+                    # logger.debug(
+                    #     f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)"
+                    # )
+                    # TODO bug is here because we don't return anything
+                    # just raise an exception?
+                    raise ValueError(f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)")
 
                 # Now that the parent was called, account for the additional table entries.
 
