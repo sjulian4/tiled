@@ -39,20 +39,24 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
     return f"{method}|{url}|{body_hashed}"  # so the cache key is based on the request
     # so i'm thinking the idea after this is that this cache key is used in Hishel 'cause it overrides the hishel key generation
 
-# TODO: need to fix this, returns 0 for size also need to check if stream is working
+# is this the right kind of size? rn i believe it is number of bytes? ask nate
+# but then why was it content before?
 def measure_entry_size(request, response, stream_size=0):
     # httpcore exception that is == httpx.ResponseNotRead()
     # Trace out the way this works for a streaming response
     # Also handle streaming request
-    if hasattr(response, "_content"):
-        size = len(response.content)
+    # I think the idea is if it has content in the response/request, it is not streaming
+    # and we take the size of that content. Otherwise, use the streaming size?
+    # But where is the content
+    if hasattr(response, "__sizeof__"):
+        size = response.__sizeof__()
     elif stream_size is None:
         raise Exception
     else:
         size = stream_size
 
-    if hasattr(request, "_content"):
-        size += len(request.content)
+    if hasattr(request, "__sizeof__"):
+        size += request.__sizeof__()
     elif stream_size is None:
         raise Exception
     else:
@@ -242,6 +246,8 @@ class TiledCache(SyncSqliteStorage):
         """If readonly, cache can be read but not updated."""
         return self._readonly
 
+# _create_entry is being called even during a cache hit which I think is what is
+# causing the count to be 2 instead of 1
     def _create_entry(
         self,
         request: Request,
@@ -262,7 +268,6 @@ class TiledCache(SyncSqliteStorage):
         :type id_: UUID
 
         """
-
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         if self.readonly:
@@ -272,11 +277,16 @@ class TiledCache(SyncSqliteStorage):
         # Rn the solution to this is to check the size after and if it is too large, delete the entry.
         # However, depending on how the cache is setup, could it be an issue for it to add when it's full 
         # even if it immediately would delete? Ask Nate
-        parent_entry = super().create_entry(
-            request=request, response=response, key=key, id_=id_
-        ) # this should handle the stream table
+
 
         with closing(self.connection.cursor()) as cursor:
+
+            # TODO I think there is an issue with this with the size for Hishel's side
+            parent_entry = super().create_entry(
+                request=request, response=response, key=key, id_=id_
+            ) # this should handle the stream table
+    
+
             (stream_size,) = cursor.execute(
                 "SELECT SUM(LENGTH(chunk_data)) FROM streams WHERE entry_id = ?",
                 (parent_entry.id.bytes,),
@@ -286,24 +296,24 @@ class TiledCache(SyncSqliteStorage):
             incoming_size = measure_entry_size(request, response, stream_size)
 
             if incoming_size > self.max_item_size:
-                super().remove_entry(parent_entry.id)
-                logger.debug(
-                    f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)"
-                )
-                return
+                    super().remove_entry(parent_entry.id)
+                    logger.debug(
+                        f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)"
+                    )
+                    return
 
-            # Now that the parent was called, account for the additional table entries.
+                # Now that the parent was called, account for the additional table entries.
 
             (total_size,) = cursor.execute("SELECT SUM(size) FROM entries").fetchone()
             total_size = total_size or 0  # If empty, total_size is None
 
-            # This is the LRU eviction. if there's not enough space will evict before adding the new one
+                # This is the LRU eviction. if there's not enough space will evict before adding the new one
             while (incoming_size + total_size) > self.capacity:
-                (entry_id, size) = cursor.execute(
-                    """SELECT id, size FROM entries ORDER BY time_last_accessed ASC"""
-                ).fetchone()
-                cursor.execute("DELETE FROM entries WHERE id = ?", [entry_id])
-                total_size -= size
+                    (entry_id, size) = cursor.execute(
+                        """SELECT id, size FROM entries ORDER BY time_last_accessed ASC"""
+                    ).fetchone()
+                    cursor.execute("DELETE FROM entries WHERE id = ?", [entry_id])
+                    total_size -= size
 
             entry = Entry(
                 id=parent_entry.id,
@@ -312,18 +322,20 @@ class TiledCache(SyncSqliteStorage):
                 meta=parent_entry.meta,
                 cache_key=parent_entry.cache_key,
             )
-            # Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
-            # fine to add them, just need an aditional thing in Tiled to handle them beyond pack and unpack. so --> can keep all
-            # ask Nate about the encoding part
+                # Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
+                # fine to add them, just need an aditional thing in Tiled to handle them beyond pack and unpack. so --> can keep all
+                # ask Nate about the encoding part
 
-            # the entries will just be Null to start with since parent didn't set them, so just have to update
+                # the entries will just be Null to start with since parent didn't set them, so just have to update
             cursor.execute(
                 "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
                 (incoming_size, datetime.now().timestamp(), entry.id.bytes),
             )  # entry.id.bytes uses the UUID to find the right entry, converting to BLOB
+    
 
             self.connection.commit()
-            return entry
+
+            return entry 
 
     def create_entry(
         self,
@@ -334,11 +346,15 @@ class TiledCache(SyncSqliteStorage):
     ) -> Entry:
         if not self._setup_completed:
             self._setup()
-        entry = self._create_entry(request, response, key, id_)
+        if not self.get_entries(key=key): #This check is here for the bug of creating multiple entries on a cache hit.
+            entry = self._create_entry(request, response, key, id_)
+        else:
+            return self.get_entries(key=key)[0]
         self._remove_expired_caches()
         return entry
 
     def get_entries(self, key: str) -> tp.List[Entry]:
+        
         """
         Retreive a response from the cache according to the provided key.
 
