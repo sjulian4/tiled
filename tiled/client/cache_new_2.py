@@ -39,24 +39,20 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
     return f"{method}|{url}|{body_hashed}"  # so the cache key is based on the request
     # so i'm thinking the idea after this is that this cache key is used in Hishel 'cause it overrides the hishel key generation
 
-# is this the right kind of size? rn i believe it is number of bytes? ask nate
-# but then why was it content before?
+# TODO, test to see if handling streams right
 def measure_entry_size(request, response, stream_size=0):
     # httpcore exception that is == httpx.ResponseNotRead()
     # Trace out the way this works for a streaming response
     # Also handle streaming request
-    # I think the idea is if it has content in the response/request, it is not streaming
-    # and we take the size of that content. Otherwise, use the streaming size?
-    # But where is the content
-    if hasattr(response, "__sizeof__"):
-        size = response.__sizeof__()
+    if hasattr(response, "read"):
+        size = len(response.read())
     elif stream_size is None:
         raise Exception
     else:
         size = stream_size
 
-    if hasattr(request, "__sizeof__"):
-        size += request.__sizeof__()
+    if hasattr(request, "read"):
+        size += len(request.read())
     elif stream_size is None:
         raise Exception
     else:
@@ -484,13 +480,3 @@ class TiledCache(SyncSqliteStorage):
         return count or 0  # if empty, count is None
 
 
-###
-# import hishel
-# import httpx
-
-# controller = hishel.Controller(key_generator=create_cache_key)
-# tiled_cache = TiledCache()
-# transport = hishel.CacheTransport(transport=httpx.HTTPTransport(), storage=tiled_cache)
-# This transport is how hishel is used, and it plugs in our TiledCache
-###
-# TODO: figure out how to test and test this.
