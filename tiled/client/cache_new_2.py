@@ -292,14 +292,22 @@ class TiledCache(SyncSqliteStorage):
             incoming_size = measure_entry_size(request, response, stream_size)
 
             if incoming_size > self.max_item_size:
-                    super().remove_entry(parent_entry.id)
-                    # logger.debug(
-                    #     f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)"
-                    # )
-                    # TODO bug is here because we don't return anything
+                self.remove_entry(parent_entry.id) # This is only a soft delete, hishel needs to run the cleanup before it actually deletes
+                cursor.execute("DELETE FROM entries WHERE id = ?", (parent_entry.id.bytes,)) #TODO: is it even necessary to have the soft delete in the parent when we have this delete here? It might be redundant
+                logger.debug(
+                    f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)"
+                )
                     # just raise an exception?
-                    raise ValueError(f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)")
-
+                    #  Instead of caching the whole item, use strategies like compression, pagination, chunking, or bypassing the cache entirely for large assets\
+                    # Pagination idea: Different pages of information?
+                    # Compression: is it reasonable to compress something so large into 1 byte (or other edge cases)? I feel like this is a stretch
+                    # Chunking: Splitting it up into multiple entries, but I feel like that wouldn't work for edge cases such as what we're testing here
+                    # Bypassing: this would be the skipping it I believe.
+                    # https://medium.com/but-it-works-on-my-machine/caching-101-what-not-to-cache-and-why-9fcd346cd535
+                    # I think the issue with the exception is anytime it tries to cache and it's too large it'll raise an exception
+                    # instead of just continuing without it being cached
+                    # raise ValueError(f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)")
+                return
                 # Now that the parent was called, account for the additional table entries.
 
             (total_size,) = cursor.execute("SELECT SUM(size) FROM entries").fetchone()
@@ -348,7 +356,8 @@ class TiledCache(SyncSqliteStorage):
             entry = self._create_entry(request, response, key, id_)
         else:
             return self.get_entries(key=key)[0]
-        self._remove_expired_caches()
+        if entry is not None: # This is in the event that the entry we are trying to cache is too large and cannot be cached
+            self._remove_expired_caches()
         return entry
 
     def get_entries(self, key: str) -> tp.List[Entry]:
