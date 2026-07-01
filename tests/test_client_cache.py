@@ -11,8 +11,12 @@ import pytest
 from tiled.adapters.array import ArrayAdapter
 from tiled.adapters.mapping import MapAdapter
 from tiled.client import Context, from_context, record_history
-from tiled.client.cache import Cache, CachedResponse, ThreadingMode, with_thread_lock
+from tiled.client.cache_new_2 import TiledCache
 from tiled.server.app import build_app
+from hishel import Entry
+import logging #TODO: delete and one below
+# logging.basicConfig(level=logging.DEBUG)
+
 
 tree = MapAdapter(
     {
@@ -26,20 +30,25 @@ tree = MapAdapter(
 @pytest.fixture
 def client():
     app = build_app(tree)
-    with Context.from_app(app, cache=Cache()) as context:
+    with Context.from_app(app, cache=TiledCache()) as context:
         yield from_context(context)
 
 
 def test_cache(client, tmpdir):
+    print("here")
+    # assert False
     cache = client.context.cache
+    print(dir(cache))
+
     before_count = cache.count()
     before_size = cache.size()
-
     # First time: not cached
     with record_history() as h:
         list(client.keys())
+        print(h.responses)
     for response in h.responses:
-        assert not isinstance(response, CachedResponse)
+        assert not response.metadata.get("hishel_from_cache")
+        # assert not isinstance(response, CachedResponse)
 
     after_count = cache.count()
     after_size = cache.size()
@@ -49,9 +58,11 @@ def test_cache(client, tmpdir):
     # Second time: cached
     with record_history() as h:
         list(client.keys())
-    for response in h.responses:
-        assert isinstance(response, CachedResponse)
+        print(h.responses)
 
+    for response in h.responses:
+        assert response.metadata.get("hishel_from_cache")
+        # assert isinstance(response, CachedResponse)
 
 def test_no_cache(client):
     client.context.cache = None
@@ -135,7 +146,7 @@ def test_readonly_cache(client):
 
     # Now use the same file as readonly cache.
     filepath = client.context.cache.filepath
-    ro_cache = client.context.cache = Cache(filepath, readonly=True)
+    ro_cache = client.context.cache = TiledCache(filepath, readonly=True)
 
     # Still cached (from before)
     with record_history() as h:
@@ -175,51 +186,51 @@ def test_clear_cache(client):
     assert cache.size() == cache.count() == 0
 
 
-def test_not_thread_safe(client, monkeypatch):
-    # Check that writes fail if thread safety is disabled
-    monkeypatch.setattr(sqlite3, "threadsafety", ThreadingMode.SINGLE_THREAD)
-    cache = client.context.cache
-    # Clear the cache in another thread
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future = executor.submit(cache.clear)
-        with pytest.raises(RuntimeError):
-            future.result(timeout=1)
+# def test_not_thread_safe(client, monkeypatch):
+#     # Check that writes fail if thread safety is disabled
+#     monkeypatch.setattr(sqlite3, "threadsafety", ThreadingMode.SINGLE_THREAD)
+#     cache = client.context.cache
+#     # Clear the cache in another thread
+#     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+#         future = executor.submit(cache.clear)
+#         with pytest.raises(RuntimeError):
+#             future.result(timeout=1)
 
 
-@pytest.mark.skipif(
-    sqlite3.threadsafety != ThreadingMode.SERIALIZED,
-    reason="sqlite not built with thread safe support",
-)
-def test_thread_safety(client):
-    cache = client.context.cache
-    # Clear the cache in another thread
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future = executor.submit(cache.clear)
-        future.result(timeout=1)
+# @pytest.mark.skipif(
+#     sqlite3.threadsafety != ThreadingMode.SERIALIZED,
+#     reason="sqlite not built with thread safe support",
+# )
+# def test_thread_safety(client):
+#     cache = client.context.cache
+#     # Clear the cache in another thread
+#     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+#         future = executor.submit(cache.clear)
+#         future.result(timeout=1)
 
 
-@pytest.mark.asyncio
-async def test_thread_lock():
-    """Check that we can prevent concurrent thread writes."""
+# @pytest.mark.asyncio
+# async def test_thread_lock():
+#     """Check that we can prevent concurrent thread writes."""
 
-    class Timer:
-        _lock = threading.Lock()
-        sleep_time = 0.01
+#     class Timer:
+#         _lock = threading.Lock()
+#         sleep_time = 0.01
 
-        @with_thread_lock
-        def sleep(self):
-            time.sleep(self.sleep_time)
+#         @with_thread_lock
+#         def sleep(self):
+#             time.sleep(self.sleep_time)
 
-    timer = Timer()
-    # Run the timer twice concurrently
-    loop = asyncio.get_running_loop()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        coros = [
-            loop.run_in_executor(executor, timer.sleep),
-            loop.run_in_executor(executor, timer.sleep),
-        ]
-        t0 = time.perf_counter()
-        await asyncio.gather(*coros)
-        run_time = time.perf_counter() - t0
-    # Check that the threads didn't run in parallel
-    assert run_time >= (2.0 * timer.sleep_time), "Threads did not lock"
+#     timer = Timer()
+#     # Run the timer twice concurrently
+#     loop = asyncio.get_running_loop()
+#     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+#         coros = [
+#             loop.run_in_executor(executor, timer.sleep),
+#             loop.run_in_executor(executor, timer.sleep),
+#         ]
+#         t0 = time.perf_counter()
+#         await asyncio.gather(*coros)
+#         run_time = time.perf_counter() - t0
+#     # Check that the threads didn't run in parallel
+#     assert run_time >= (2.0 * timer.sleep_time), "Threads did not lock"

@@ -22,7 +22,7 @@ CACHE_DATABASE_SCHEMA_VERSION = 2
 # This is currently only used for checking SQlite thread-safety
 PY311 = sys.version_info >= (3, 11)
 
-
+# TODO: something wrong with this I think
 def create_cache_key(request: Request, body: bytes = b"") -> str:
     """
     Generate a Cache key. A Cache key contains the method, url, and request body.
@@ -32,7 +32,7 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
     :type body: tp.Optional[bytes]
     """
     method = request.method.decode()  # so this takes in the request and decodes it
-    url = request.url.decode()  # check that this is the full URL
+    url = request.url.decode() # check that this is the full URL
     body_hasher = sha256()
     body_hasher.update(body)
     body_hashed = body_hasher.hexdigest()
@@ -41,25 +41,39 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
 
 # TODO, test to see if handling streams right
 # i'm very suspicious of this function... but at least it's not returning 0 anymore
+# the read() is consuming the stream and then causing a problem with when the stream table
+# is trying to be made in the parent
 def measure_entry_size(request, response, stream_size=0):
     # httpcore exception that is == httpx.ResponseNotRead()
     # Trace out the way this works for a streaming response
     # Also handle streaming request
-    if hasattr(response, "read"):
-        size = len(response.read())
+    # return 1
+    # print(response.content)
+    # print(dir(response))
+    # # print(response.metadata)
+    # print(response.headers["content-length"])
+    # print(response.headers)
+    # # # print(len(response.read()))
+
+    # print(dir(request))
+    # print(request.headers)
+    # # print(request.headers["content-length"])
+    # print(request.metadata)
+    if hasattr(response, "read"): #TODO: change this hasattr
+        # size = int(response.headers["content-length"])
+        size = int(response.headers["content-length"])
     elif stream_size is None:
         raise Exception
     else:
         size = stream_size
 
-    if hasattr(request, "read"):
-        size += len(request.read())
+    if hasattr(request, "read"): #TODO: change this hasattr
+        size += len(request.read()) #TODO: when we did this for response there was a streaming issue, might not be a problem here since it's for request but be careful
     elif stream_size is None:
         raise Exception
     else:
         size += stream_size
     return size
-
 
 class TiledCache(SyncSqliteStorage):
     def __init__(
@@ -87,7 +101,8 @@ class TiledCache(SyncSqliteStorage):
             # TODO Consider defaulting to a temporary database, with a warning,
             # if TILED_CACHE_DIR points to a networked filesystem. Unless perhaps
             # flock() support can be checked (nfs version, or lock manager, etc).
-            # Ask Nate if this is something we should look into
+            # this is for file locking for networked file systems not having file locking. give named in memory cache. how feasible to do that with hishel?
+            # how hard to override parameters to set in memory cache with sqlite3
             filepath = TILED_CACHE_DIR / "http_response_cache.db"
         self._filepath = filepath
         self._capacity = None
@@ -124,11 +139,9 @@ class TiledCache(SyncSqliteStorage):
                 "SELECT name FROM sqlite_master WHERE type='table';"
             )
             tables = [row[0] for row in cursor.fetchall()]
-
             if not tables:
                 # We have an empty database
                 self._initialize_database() 
-                self._initialized = True
 
             elif "tiled_http_response_cache_version" not in tables:
                 # We have a non-empty database that we do not recognize.
@@ -150,9 +163,10 @@ class TiledCache(SyncSqliteStorage):
                         self._filepath, check_same_thread=False
                     )
                     self._initialize_database() 
-                    self._initialized = True
+                    
 
             cursor.close()
+            self._initialized = True
             self._setup_completed = True
 
     def _initialize_database(self) -> None:
@@ -381,6 +395,8 @@ class TiledCache(SyncSqliteStorage):
         else:
             logger.debug(f"Cache hit: {key}")  # or info?
 
+# TODO: put a big chunk of data to see if it is significantly improved perfcounter 
+
         # This is here to update time_last_accessed for the sake of the LRU eviction
         # need to update it in the Entry list AND in the table
         with closing(self.connection.cursor()) as cursor:
@@ -491,3 +507,4 @@ class TiledCache(SyncSqliteStorage):
         return count or 0  # if empty, count is None
 
 
+# TODO: fix the pytests
