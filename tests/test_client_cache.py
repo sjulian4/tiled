@@ -35,10 +35,8 @@ def client():
 
 
 def test_cache(client, tmpdir):
-    print("here")
     # assert False
     cache = client.context.cache
-    print(dir(cache))
 
     before_count = cache.count()
     before_size = cache.size()
@@ -47,7 +45,7 @@ def test_cache(client, tmpdir):
         list(client.keys())
         print(h.responses)
     for response in h.responses:
-        assert not response.metadata.get("hishel_from_cache")
+        assert not response.extensions.get("hishel_from_cache")
         # assert not isinstance(response, CachedResponse)
 
     after_count = cache.count()
@@ -58,10 +56,8 @@ def test_cache(client, tmpdir):
     # Second time: cached
     with record_history() as h:
         list(client.keys())
-        print(h.responses)
-
     for response in h.responses:
-        assert response.metadata.get("hishel_from_cache")
+        assert response.extensions.get("hishel_from_cache")
         # assert isinstance(response, CachedResponse)
 
 def test_no_cache(client):

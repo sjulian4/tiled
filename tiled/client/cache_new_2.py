@@ -31,8 +31,8 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
     :param body: The body of the request. To be included for e.g. POST
     :type body: tp.Optional[bytes]
     """
-    method = request.method.decode()  # so this takes in the request and decodes it
-    url = request.url.decode() # check that this is the full URL
+    method = request.method.encode()  # so this takes in the request and decodes it
+    url = request.url # check that this is the full URL
     body_hasher = sha256()
     body_hasher.update(body)
     body_hashed = body_hasher.hexdigest()

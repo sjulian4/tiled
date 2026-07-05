@@ -2,9 +2,6 @@
 Adapted from https://raw.githubusercontent.com/obendidi/httpx-cache/main/httpx_cache/transport.py
 in accordance with its BSD-3 license
 """
-
-# https://github.com/karpetrosyan/hishel/blob/21430628f597d05ede8a78259736aa4b59e52821/src/hishel/_sync_httpx.py#L157
-
 from hishel.httpx import SyncCacheTransport
 
 import typing as tp
@@ -15,7 +12,6 @@ from .cache_new_2 import TiledCache, create_cache_key
 from .cache_control import ByteStreamWrapper, CacheControl
 from .logger import collect_request, collect_response, log_request, log_response, logger
 from .utils import TiledResponse
-
 
 
 class TiledTransport(httpx.BaseTransport):
@@ -42,6 +38,8 @@ class TiledTransport(httpx.BaseTransport):
         if __debug__:
             # Log the actual server traffic, not the cached response.
             log_response(response)
+        collect_request(request)
+        collect_response(response)
         return response
 
 
