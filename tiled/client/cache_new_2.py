@@ -177,21 +177,19 @@ class TiledCache(SyncSqliteStorage):
             # cursor.execute("ALTER TABLE {table_name} ADD COLUMN {variable_name} INTEGER")
             #  Missing from new: body, is_stream(separate table?), encode (perhaps just default to ascii on everything?, size, time_last_accessed)
             # below might be an issue if those columns already exist
-            try:
+       
+            with self._lock:
                 cursor.execute("ALTER TABLE entries ADD COLUMN size INTEGER")
                 cursor.execute("ALTER TABLE entries ADD COLUMN time_last_accessed INTEGER")
-            except sqlite3.OperationalError:
-                logger.info("Cache database already exists at this location.")
-                pass
-
             # The two below tables were in the previous cache version.
-            cursor.execute(
-                "CREATE TABLE tiled_http_response_cache_version (version INTEGER)"
-            )
-            cursor.execute(
-                "INSERT INTO tiled_http_response_cache_version (version) VALUES (?)",
-                (CACHE_DATABASE_SCHEMA_VERSION,),
-            )
+      
+                cursor.execute(
+                    "CREATE TABLE tiled_http_response_cache_version (version INTEGER)"
+                )
+                cursor.execute(
+                    "INSERT INTO tiled_http_response_cache_version (version) VALUES (?)",
+                    (CACHE_DATABASE_SCHEMA_VERSION,),
+                )
 
             self.connection.commit()
 
