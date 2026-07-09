@@ -274,7 +274,7 @@ class Context:
             client.headers = headers
             # Do this in the setter to avoid being overwritten.
             client.follow_redirects = True
-            client._transport = TiledTransport(SyncCacheTransport(
+            client._transport = TiledTransport(transport=SyncCacheTransport(
                 next_transport=client._transport,
                 storage=cache,
             ), cache=cache)
