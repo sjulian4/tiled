@@ -23,6 +23,7 @@ CACHE_DATABASE_SCHEMA_VERSION = 2
 # This is currently only used for checking SQlite thread-safety
 PY311 = sys.version_info >= (3, 11)
 
+
 # TODO: something wrong with this I think
 def create_cache_key(request: Request, body: bytes = b"") -> str:
     """
@@ -33,12 +34,13 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
     :type body: tp.Optional[bytes]
     """
     method = request.method.encode()  # so this takes in the request and decodes it
-    url = request.url # check that this is the full URL
+    url = request.url  # check that this is the full URL
     body_hasher = sha256()
     body_hasher.update(body)
     body_hashed = body_hasher.hexdigest()
     return f"{method}|{url}|{body_hashed}"  # so the cache key is based on the request
     # so i'm thinking the idea after this is that this cache key is used in Hishel 'cause it overrides the hishel key generation
+
 
 # FIxxxxxx
 # TODO, test to see if handling streams right
@@ -49,20 +51,23 @@ def measure_entry_size(request, response, stream_size=0):
     # httpcore exception that is == httpx.ResponseNotRead()
     # Trace out the way this works for a streaming response
     # Also handle streaming request
-    if hasattr(response, "headers") and "content-length" in response.headers: 
+    if hasattr(response, "headers") and "content-length" in response.headers:
         size = int(response.headers["content-length"])
     elif stream_size is None:
         raise Exception
     else:
         size = stream_size
 
-    if hasattr(request, "read"): #TODO: change this hasattr
-        size += len(request.read()) #TODO: when we did this for response there was a streaming issue, might not be a problem here since it's for request but be careful
+    if hasattr(request, "read"):  # TODO: change this hasattr
+        size += len(
+            request.read()
+        )  # TODO: when we did this for response there was a streaming issue, might not be a problem here since it's for request but be careful
     elif stream_size is None:
         raise Exception
     else:
         size += stream_size
     return size
+
 
 class TiledCache(SyncSqliteStorage):
     def __init__(
@@ -88,13 +93,13 @@ class TiledCache(SyncSqliteStorage):
             # if(TILED_CACHE_DIR points to networked file system){
             #     filepath = ":memory:"
             # }
-            # it seems complicated to figure out if a file system is networked or not 
+            # it seems complicated to figure out if a file system is networked or not
             # TODO Consider defaulting to a temporary database, with a warning,
             # if TILED_CACHE_DIR points to a networked filesystem. Unless perhaps
             # flock() support can be checked (nfs version, or lock manager, etc).
             # this is for file locking for networked file systems not having file locking. give named in memory cache. how feasible to do that with hishel?
             # how hard to override parameters to set in memory cache with sqlite3
-            # else:    
+            # else:
             filepath = TILED_CACHE_DIR / "http_response_cache.db"
         self._filepath = filepath
         self._capacity = None
@@ -103,14 +108,9 @@ class TiledCache(SyncSqliteStorage):
         self.max_item_size = max_item_size
         self._readonly = readonly  # unique to tiled
 
-        print("READONLY: ", self._readonly)
-        super().__init__(
-            connection=connection, database_path=filepath, default_ttl=ttl
-        )
+        super().__init__(connection=connection, database_path=filepath, default_ttl=ttl)
 
         self._setup()
-
-
 
     # This may seem redundant because of the _initialized boolean value in the parent, however I think
     # that this is still necessary in case a bug happens where it gets initialized in the parent but not here.
@@ -123,7 +123,9 @@ class TiledCache(SyncSqliteStorage):
                 # in readonly mode. For extra safety, we open a readonly connection
                 # to the database, so that SQLite itself will prohibit writing.
                 database = (
-                    f"file:{self._filepath}?mode=ro" if self._readonly else self._filepath
+                    f"file:{self._filepath}?mode=ro"
+                    if self._readonly
+                    else self._filepath
                 )
                 self.connection = sqlite3.connect(
                     database, uri=self._readonly, check_same_thread=False
@@ -157,7 +159,6 @@ class TiledCache(SyncSqliteStorage):
                     )
                     self._initialize_database()
 
-
             cursor.close()
             self._initialized = True
             self._setup_completed = True
@@ -170,12 +171,11 @@ class TiledCache(SyncSqliteStorage):
             # cursor.execute("ALTER TABLE {table_name} ADD COLUMN {variable_name} INTEGER")
             #  Missing from new: body, is_stream(separate table?), encode (perhaps just default to ascii on everything?, size, time_last_accessed)
             # below might be an issue if those columns already exist
-       
 
             cursor.execute("ALTER TABLE entries ADD COLUMN size INTEGER")
             cursor.execute("ALTER TABLE entries ADD COLUMN time_last_accessed INTEGER")
             # The two below tables were in the previous cache version.
-      
+
             cursor.execute(
                 "CREATE TABLE tiled_http_response_cache_version (version INTEGER)"
             )
@@ -252,8 +252,8 @@ class TiledCache(SyncSqliteStorage):
         """If readonly, cache can be read but not updated."""
         return self._readonly
 
-# _create_entry is being called even during a cache hit which I think is what is
-# causing the count to be 2 instead of 1
+    # _create_entry is being called even during a cache hit which I think is what is
+    # causing the count to be 2 instead of 1
     def _create_entry(
         self,
         request: Request,
@@ -276,13 +276,15 @@ class TiledCache(SyncSqliteStorage):
         """
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
-        print("INSIDE CREATE ENTRY READONLY: ", self.readonly)
         if self.readonly:
-            print("INSIDE READ ONLY CREATE ENTRY")
-            raise RuntimeError("Cannot store new entries in read-only cache")
-        print("NOT INSIDE READ ONLY CREATE ENTRY")
+            return Entry(
+                    id=id_ or uuid.uuid4(),
+                    request=request,
+                    response=response,  # save_stream isn't attached since the parent create_entry is never called so doesn't get streamed
+                    meta=EntryMeta(created_at=datetime.now().timestamp()),
+                    cache_key=key.encode("utf-8"),
+                )
         with self._lock, closing(self.connection.cursor()) as cursor:
-
             # if isinstance(response.stream, (tp.Iterator, tp.Iterable)):
             #     # print(f"HERE: {response.stream}")
             #     # print(dir(response.stream))
@@ -291,10 +293,9 @@ class TiledCache(SyncSqliteStorage):
             #         "SELECT SUM(LENGTH(chunk_data)) FROM streams WHERE entry_id = ?",
             #         (pair_id.bytes,),
             #     ).fetchone()  # adds all the lengths together in bytes from blob
-            
+
             # stream_size = stream_size or 0
             # print(stream_size)
-
 
             # Check the size of the request and response
             request_and_response_size = measure_entry_size(request, response, 0)
@@ -305,20 +306,18 @@ class TiledCache(SyncSqliteStorage):
                 return Entry(
                     id=id_ or uuid.uuid4(),
                     request=request,
-                    response=response, #save_stream isn't attached since the parent create_entry is never called so doesn't get streamed        
+                    response=response,  # save_stream isn't attached since the parent create_entry is never called so doesn't get streamed
                     meta=EntryMeta(created_at=datetime.now().timestamp()),
                     cache_key=key.encode("utf-8"),
                 )
-                # doesn't get commited 
-        
-            
+                # doesn't get commited
 
-            parent_entry = super().create_entry( # This commits in the parent
+            parent_entry = super().create_entry(  # This commits in the parent
                 request=request, response=response, key=key, id_=id_
-            ) # this should handle the stream table
+            )  # this should handle the stream table
 
             # next(parent_entry.response.stream)
-            
+
             # TODO delete below doesn't give any actual information
             # (stream_size,) = cursor.execute(
             #     "SELECT SUM(LENGTH(chunk_data)) FROM streams WHERE entry_id = ?",
@@ -332,12 +331,12 @@ class TiledCache(SyncSqliteStorage):
             # ).fetchone()
             # print(f"STREAM: {stream}")
 
-            # So save_stream uses a generator, and then as data is needed it 
+            # So save_stream uses a generator, and then as data is needed it
             # is consumed and saved by the generator, so the streams table isn't
             # complete until this happens.
             # The parent create_entry calls save_stream which makes a wrapper generator,
             # and it sits, waiting until the consumer wants data by calling next()
-            # on the generator. So there is nothing in the stream table 
+            # on the generator. So there is nothing in the stream table
             # This is confirmed with next(parent_entry.response.stream)
 
             # TODO: should this be 0?? for the test
@@ -346,70 +345,77 @@ class TiledCache(SyncSqliteStorage):
 
             incoming_size = measure_entry_size(request, response, 0)
 
-
             if incoming_size > self.max_item_size:
-                self.remove_entry(parent_entry.id) # This is only a soft delete, hishel needs to run the cleanup before it actually deletes
+                self.remove_entry(
+                    parent_entry.id
+                )  # This is only a soft delete, hishel needs to run the cleanup before it actually deletes
                 with self._lock:
-                    cursor.execute("DELETE FROM entries WHERE id = ?", (parent_entry.id.bytes,)) #TODO: is it even necessary to have the soft delete in the parent when we have this delete here? It might be redundant
-                    cursor.execute("DELETE FROM streams WHERE entry_id = ?", (parent_entry.id.bytes,)) 
-                    
+                    cursor.execute(
+                        "DELETE FROM entries WHERE id = ?", (parent_entry.id.bytes,)
+                    )  # TODO: is it even necessary to have the soft delete in the parent when we have this delete here? It might be redundant
+                    cursor.execute(
+                        "DELETE FROM streams WHERE entry_id = ?",
+                        (parent_entry.id.bytes,),
+                    )
+
                 logger.debug(
                     f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)"
                 )
-                        # just raise an exception?
-                        #  Instead of caching the whole item, use strategies like compression, pagination, chunking, or bypassing the cache entirely for large assets\
-                        # Pagination idea: Different pages of information?
-                        # Compression: is it reasonable to compress something so large into 1 byte (or other edge cases)? I feel like this is a stretch
-                        # Chunking: Splitting it up into multiple entries, but I feel like that wouldn't work for edge cases such as what we're testing here
-                        # Bypassing: this would be the skipping it I believe.
-                        # https://medium.com/but-it-works-on-my-machine/caching-101-what-not-to-cache-and-why-9fcd346cd535
-                        # I think the issue with the exception is anytime it tries to cache and it's too large it'll raise an exception
-                        # instead of just continuing without it being cached
-                        # raise ValueError(f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)")
-                #same notes as above except for the save_stream thing, TODO look into that make sure it won't be a problem
+                # just raise an exception?
+                #  Instead of caching the whole item, use strategies like compression, pagination, chunking, or bypassing the cache entirely for large assets\
+                # Pagination idea: Different pages of information?
+                # Compression: is it reasonable to compress something so large into 1 byte (or other edge cases)? I feel like this is a stretch
+                # Chunking: Splitting it up into multiple entries, but I feel like that wouldn't work for edge cases such as what we're testing here
+                # Bypassing: this would be the skipping it I believe.
+                # https://medium.com/but-it-works-on-my-machine/caching-101-what-not-to-cache-and-why-9fcd346cd535
+                # I think the issue with the exception is anytime it tries to cache and it's too large it'll raise an exception
+                # instead of just continuing without it being cached
+                # raise ValueError(f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)")
+                # same notes as above except for the save_stream thing, TODO look into that make sure it won't be a problem
                 return Entry(
                     id=id_ or uuid.uuid4(),
                     request=request,
-                    response=response,          
+                    response=response,
                     meta=EntryMeta(created_at=datetime.now().timestamp()),
                     cache_key=key.encode("utf-8"),
                 )
-                    # Now that the parent was called, account for the additional table entries.
-                                    # the entries will just be Null to start with since parent didn't set them, so just have to update
-               
+                # Now that the parent was called, account for the additional table entries.
+                # the entries will just be Null to start with since parent didn't set them, so just have to update
+
             entry = Entry(
-                    id=parent_entry.id,
-                    request=parent_entry.request,
-                    response=parent_entry.response,
-                    meta=parent_entry.meta,
-                    cache_key=parent_entry.cache_key,
-                )
-               
+                id=parent_entry.id,
+                request=parent_entry.request,
+                response=parent_entry.response,
+                meta=parent_entry.meta,
+                cache_key=parent_entry.cache_key,
+            )
+
             cursor.execute(
-                    "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
-                    (incoming_size, datetime.now().timestamp(), entry.id.bytes),
-                )  # entry.id.bytes uses the UUID to find the right entry, converting to BLOB
-                
-            (total_size,) = cursor.execute("SELECT SUM(size) FROM entries WHERE deleted_at is NULL").fetchone()
+                "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
+                (incoming_size, datetime.now().timestamp(), entry.id.bytes),
+            )  # entry.id.bytes uses the UUID to find the right entry, converting to BLOB
+
+            (total_size,) = cursor.execute(
+                "SELECT SUM(size) FROM entries WHERE deleted_at is NULL"
+            ).fetchone()
             total_size = total_size or 0  # If empty, total_size is None
 
-               # This is the LRU eviction. if there's not enough space will evict before adding the new one
+            # This is the LRU eviction. if there's not enough space will evict before adding the new one
             while (total_size) > self.capacity:
-                        (entry_id, size) = cursor.execute(
-                            """SELECT id, size FROM entries WHERE deleted_at is NULL ORDER BY time_last_accessed ASC"""
-                        ).fetchone()
-                        self.remove_entry(uuid.UUID(bytes=entry_id)) # this is to soft delete in case stream is still being read
-                        # The uuid.UUID(bytes=) stuff is because hishel expects a UUID and wants to convert it to bytes itself
-                        # cursor.execute("DELETE FROM entries WHERE id = ?", [entry_id])
-                        # cursor.execute("DELETE FROM streams WHERE entry_id = ?", [entry_id])
-                        total_size -= size
+                (entry_id, size) = cursor.execute(
+                    """SELECT id, size FROM entries WHERE deleted_at is NULL ORDER BY time_last_accessed ASC"""
+                ).fetchone()
+                self.remove_entry(
+                    uuid.UUID(bytes=entry_id)
+                )  # this is to soft delete in case stream is still being read
+                # The uuid.UUID(bytes=) stuff is because hishel expects a UUID and wants to convert it to bytes itself
+                # cursor.execute("DELETE FROM entries WHERE id = ?", [entry_id])
+                # cursor.execute("DELETE FROM streams WHERE entry_id = ?", [entry_id])
+                total_size -= size
 
-                    # Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
-                    # fine to add them, just need an aditional thing in Tiled to handle them beyond pack and unpack. so --> can keep all
-                    # ask Nate about the encoding part
-
-
-
+            # Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
+            # fine to add them, just need an aditional thing in Tiled to handle them beyond pack and unpack. so --> can keep all
+            # ask Nate about the encoding part
 
             self.connection.commit()
 
@@ -424,16 +430,19 @@ class TiledCache(SyncSqliteStorage):
     ) -> Entry:
         if not self._setup_completed:
             self._setup()
-        if not self.get_entries(key=key): #This check is here for the bug of creating multiple entries on a cache hit.
+        if not self.get_entries(
+            key=key
+        ):  # This check is here for the bug of creating multiple entries on a cache hit.
             entry = self._create_entry(request, response, key, id_)
         else:
             return self.get_entries(key=key)[0]
-        if entry is not None: # This is in the event that the entry we are trying to cache is too large and cannot be cached
+        if (
+            entry is not None
+        ):  # This is in the event that the entry we are trying to cache is too large and cannot be cached
             self._remove_expired_caches()
         return entry
 
     def get_entries(self, key: str) -> tp.List[Entry]:
-
         """
         Retreive a response from the cache according to the provided key.
 
@@ -453,10 +462,11 @@ class TiledCache(SyncSqliteStorage):
         else:
             logger.info(f"Cache hit: {key}")
 
-# TODO: put a big chunk of data to see if it is significantly improved perfcounter
+        # TODO: put a big chunk of data to see if it is significantly improved perfcounter
 
         # This is here to update time_last_accessed for the sake of the LRU eviction
         # need to update it in the Entry list AND in the table
+
         with self._lock, closing(self.connection.cursor()) as cursor:
             entries = []
             for entry in parent_entries:
@@ -469,11 +479,12 @@ class TiledCache(SyncSqliteStorage):
                 )
                 entries.append(updated_entry)
                 # above deals with the returned entries list, below deals with the table
-                cursor.execute(
-                    "UPDATE entries SET time_last_accessed = ? WHERE id = ?",
-                    (datetime.now().timestamp(), entry.id.bytes),
-                )
-                self.connection.commit()
+                if not self.readonly:
+                    cursor.execute(
+                        "UPDATE entries SET time_last_accessed = ? WHERE id = ?",
+                        (datetime.now().timestamp(), entry.id.bytes),
+                    )
+                    self.connection.commit()
             return entries
 
     # Deleted _remove_entry and remove_entry because the parent already does it.
@@ -481,7 +492,7 @@ class TiledCache(SyncSqliteStorage):
     # cache was setup, depends on what we want to do with that. I think ask Nate for thoughts
 
     # perhaps change to call _create_entry?
-    def _update_entry(
+    def update_entry(
         self,
         id: uuid.UUID,
         new_entry: tp.Union[Entry, tp.Callable[[Entry], Entry]],
@@ -497,23 +508,25 @@ class TiledCache(SyncSqliteStorage):
         """
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
-        if self.readonly:
-            raise RuntimeError("Cannot update entries in read-only cache")
+        if not self.readonly:
+            
 
-        completed_entry = super().update_entry(id=id, new_pair=new_entry)
+            completed_entry = super().update_entry(id=id, new_pair=new_entry)
         # note for understanding, in the parent update_entry, the "data" is the Entry object
         # TODO: find new way to get size and time_last_accessed and update here if needed?
-        with self._lock:
-            connection = self._ensure_connection() # Note: I think there would be a bug here with if we were to remove the setup check because then the database wouldn't be initialized, so it will only initialiize in the parent and then not add the additional columns that we do here
-            cursor = connection.cursor()
-            cursor.execute(
-                "UPDATE entries SET time_last_accessed = ? WHERE id = ?",
-                (
-                    datetime.now().timestamp(),
-                    id.bytes,
-                ),
-            )
-            connection.commit()
+            with self._lock:
+                connection = (
+                    self._ensure_connection()
+                )  # Note: I think there would be a bug here with if we were to remove the setup check because then the database wouldn't be initialized, so it will only initialiize in the parent and then not add the additional columns that we do here
+                cursor = connection.cursor()
+                cursor.execute(
+                    "UPDATE entries SET time_last_accessed = ? WHERE id = ?",
+                    (
+                        datetime.now().timestamp(),
+                        id.bytes,
+                    ),
+                )
+                connection.commit()
 
             return completed_entry
 
@@ -524,7 +537,7 @@ class TiledCache(SyncSqliteStorage):
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         if self.readonly:
-            raise RuntimeError("Cannot remove entries from read-only cache")
+            return
         if self.default_ttl is None:
             return
         with self._lock, closing(self.connection.cursor()) as cursor:
@@ -562,7 +575,9 @@ class TiledCache(SyncSqliteStorage):
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         with self._lock, closing(self.connection.cursor()) as cursor:
-            (count,) = cursor.execute("SELECT COUNT(*) FROM entries WHERE deleted_at is NULL").fetchone()
+            (count,) = cursor.execute(
+                "SELECT COUNT(*) FROM entries WHERE deleted_at is NULL"
+            ).fetchone()
         return count or 0  # if empty, count is None
 
 

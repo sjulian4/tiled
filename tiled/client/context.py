@@ -274,10 +274,7 @@ class Context:
             client.headers = headers
             # Do this in the setter to avoid being overwritten.
             client.follow_redirects = True
-            client._transport = TiledTransport(transport=SyncCacheTransport(
-                next_transport=client._transport,
-                storage=cache,
-            ), cache=cache)
+            client._transport = TiledTransport(transport=client._transport, cache=cache)
             client.__enter__()
             # The TestClient is meant to be used only as a context manager,
             # where the context starts and stops and the wrapped ASGI app.

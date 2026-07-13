@@ -174,10 +174,12 @@ def test_readonly_cache(client):
     # And cache size has not changed
     assert ro_cache.size() == orig_size
 
+    print(dir(ro_cache))
+
     # Implementation detail: database connection is read-only,
     # for defense in depth.
     with pytest.raises(sqlite3.OperationalError):
-        with closing(ro_cache._conn.cursor()) as cur:
+        with closing(ro_cache._ensure_connection.cursor()) as cur:
             cur.execute("DELETE FROM responses")
 
 

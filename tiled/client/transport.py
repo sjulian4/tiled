@@ -83,6 +83,23 @@ class TiledTransport(httpx.BaseTransport):
         else:
             self.transport = httpx.HTTPTransport()
         self.cache = cache
+    
+    # 
+    @property
+    def cache(self):
+        return self._cache
+
+    @cache.setter
+    def cache(self, cache):
+        self._cache = cache
+        if cache is None:
+            self._inner = self.transport
+        else:
+            self._inner = SyncCacheTransport(
+                next_transport=self.transport,
+                storage=cache,
+            )
+    # 
 
     def close(self) -> None:
         self.transport.close()
@@ -126,7 +143,8 @@ class TiledTransport(httpx.BaseTransport):
         if __debug__:
             log_request(request)
             collect_request(request)
-        response = self.transport.handle_request(request)
+        response = self._inner.handle_request(request)
+        # response = self.transport.handle_request(request)
         response.__class__ = TiledResponse
         response.request = request
         if __debug__:
