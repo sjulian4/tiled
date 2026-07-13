@@ -6,6 +6,7 @@ import threading
 import time
 from contextlib import closing
 
+
 import numpy
 import pytest
 
