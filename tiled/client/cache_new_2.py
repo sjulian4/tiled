@@ -1,10 +1,13 @@
+import enum
 import os
 import sqlite3
 import sys
+import threading
 import typing as tp
 import uuid
 from contextlib import closing
 from datetime import datetime
+from functools import wraps
 from hashlib import sha256
 from pathlib import Path
 
@@ -22,6 +25,33 @@ CACHE_DATABASE_SCHEMA_VERSION = 2
 
 # This is currently only used for checking SQlite thread-safety
 PY311 = sys.version_info >= (3, 11)
+
+
+def with_thread_lock(fn):
+    """Makes sure the wrapper isn't accessed concurrently."""
+
+    @wraps(fn)
+    def wrapper(obj, *args, **kwargs):
+        obj._lock.acquire()
+        try:
+            result = fn(obj, *args, **kwargs)
+        finally:
+            obj._lock.release()
+        return result
+
+    return wrapper
+
+
+class ThreadingMode(enum.IntEnum):
+    """Threading mode used in the sqlite3 package.
+
+    https://docs.python.org/3/library/sqlite3.html#sqlite3.threadsafety
+
+    """
+
+    SINGLE_THREAD = 0
+    MULTI_THREAD = 1
+    SERIALIZED = 3
 
 
 # TODO: something wrong with this I think
@@ -107,10 +137,26 @@ class TiledCache(SyncSqliteStorage):
         self.capacity = capacity
         self.max_item_size = max_item_size
         self._readonly = readonly  # unique to tiled
+        self._owner_thread = threading.current_thread().ident
 
         super().__init__(connection=connection, database_path=filepath, default_ttl=ttl)
 
         self._setup()
+
+    def write_safe(self):
+        """Check that it is safe to write.
+
+        SQLite is not threadsafe for concurrent _writes_ unless the
+        underlying sqlite library was built with thread safety
+        enabled. Even still, it may be a good idea to use a thread
+        lock (``@with_thread_lock``) to prevent parallel writes.
+
+        """
+        is_main_thread = threading.current_thread().ident == self._owner_thread
+        sqlite_is_safe = sqlite3.threadsafety == ThreadingMode.SERIALIZED
+        return (
+            is_main_thread or sqlite_is_safe
+        )  # this is just checking if it is safe for multiple threads
 
     # This may seem redundant because of the _initialized boolean value in the parent, however I think
     # that this is still necessary in case a bug happens where it gets initialized in the parent but not here.
@@ -278,12 +324,14 @@ class TiledCache(SyncSqliteStorage):
             raise RuntimeError("Cache is not connected")
         if self.readonly:
             return Entry(
-                    id=id_ or uuid.uuid4(),
-                    request=request,
-                    response=response,  # save_stream isn't attached since the parent create_entry is never called so doesn't get streamed
-                    meta=EntryMeta(created_at=datetime.now().timestamp()),
-                    cache_key=key.encode("utf-8"),
-                )
+                id=id_ or uuid.uuid4(),
+                request=request,
+                response=response,  # save_stream isn't attached since the parent create_entry is never called so doesn't get streamed
+                meta=EntryMeta(created_at=datetime.now().timestamp()),
+                cache_key=key.encode("utf-8"),
+            )
+        if not self.write_safe():
+            raise RuntimeError("Write is not safe from another thread")
         with self._lock, closing(self.connection.cursor()) as cursor:
             # if isinstance(response.stream, (tp.Iterator, tp.Iterable)):
             #     # print(f"HERE: {response.stream}")
@@ -421,6 +469,7 @@ class TiledCache(SyncSqliteStorage):
 
             return entry
 
+    @with_thread_lock
     def create_entry(
         self,
         request: Request,
@@ -442,6 +491,7 @@ class TiledCache(SyncSqliteStorage):
             self._remove_expired_caches()
         return entry
 
+    @with_thread_lock
     def get_entries(self, key: str) -> tp.List[Entry]:
         """
         Retreive a response from the cache according to the provided key.
@@ -479,7 +529,7 @@ class TiledCache(SyncSqliteStorage):
                 )
                 entries.append(updated_entry)
                 # above deals with the returned entries list, below deals with the table
-                if not self.readonly:
+                if not self.readonly and self.write_safe():
                     cursor.execute(
                         "UPDATE entries SET time_last_accessed = ? WHERE id = ?",
                         (datetime.now().timestamp(), entry.id.bytes),
@@ -509,11 +559,9 @@ class TiledCache(SyncSqliteStorage):
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         if not self.readonly:
-            
-
             completed_entry = super().update_entry(id=id, new_pair=new_entry)
-        # note for understanding, in the parent update_entry, the "data" is the Entry object
-        # TODO: find new way to get size and time_last_accessed and update here if needed?
+            # note for understanding, in the parent update_entry, the "data" is the Entry object
+            # TODO: find new way to get size and time_last_accessed and update here if needed?
             with self._lock:
                 connection = (
                     self._ensure_connection()
@@ -547,12 +595,17 @@ class TiledCache(SyncSqliteStorage):
             )
             self.connection.commit()
 
+    @with_thread_lock
     def clear(self):
         """Drop all entries from HTTP response cache."""
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         if self.readonly:
             raise RuntimeError("Cannot clear read-only cache")
+        if not self.write_safe():
+            raise RuntimeError(
+                "Cannot clear cache from a different thread than the one it was created on"
+            )
         with self._lock, closing(self.connection.cursor()) as cursor:
             cursor.execute("DELETE FROM entries")
             cursor.execute("DELETE FROM streams")

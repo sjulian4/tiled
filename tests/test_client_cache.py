@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import logging  # TODO: delete and one below
 import sqlite3
 import threading
 import time
@@ -11,10 +12,9 @@ import pytest
 from tiled.adapters.array import ArrayAdapter
 from tiled.adapters.mapping import MapAdapter
 from tiled.client import Context, from_context, record_history
-from tiled.client.cache_new_2 import TiledCache
+from tiled.client.cache_new_2 import ThreadingMode, TiledCache, with_thread_lock
 from tiled.server.app import build_app
-from hishel import Entry
-import logging #TODO: delete and one below
+
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -60,6 +60,7 @@ def test_cache(client, tmpdir):
         assert response.extensions.get("hishel_from_cache")
         # assert isinstance(response, CachedResponse)
 
+
 def test_no_cache(client):
     client.context.cache = None
 
@@ -93,7 +94,7 @@ def test_lru_eviction(client):
     with record_history() as h:
         client.values()[i]
     for response in h.responses:
-        assert response.extensions.get("hishel_from_cache")    
+        assert response.extensions.get("hishel_from_cache")
 
     # Least recently accessed: has been evicted
     with record_history() as h:
@@ -124,8 +125,6 @@ def test_item_too_large_to_store(client):
         assert not response.extensions.get("hishel_from_cache")
 
 
-
-
 def test_readonly_cache(client):
     # Start with a writable cache.
 
@@ -146,7 +145,7 @@ def test_readonly_cache(client):
     # Now use the same file as readonly cache.
     filepath = client.context.cache.filepath
     ro_cache = client.context.cache = TiledCache(filepath=filepath, readonly=True)
-    
+
     # Still cached (from before)
     with record_history() as h:
         client.values()[0]
@@ -163,8 +162,6 @@ def test_readonly_cache(client):
     # print(h.responses[0].extensions) Problem here: hishel_stored is true
     # so it is storing when it shouldn't TODO delete this comment
 
-    
-
     # Second time: still not cached
     with record_history() as h:
         client.values()[1]
@@ -174,12 +171,10 @@ def test_readonly_cache(client):
     # And cache size has not changed
     assert ro_cache.size() == orig_size
 
-    print(dir(ro_cache))
-
     # Implementation detail: database connection is read-only,
     # for defense in depth.
     with pytest.raises(sqlite3.OperationalError):
-        with closing(ro_cache._ensure_connection.cursor()) as cur:
+        with closing(ro_cache.connection.cursor()) as cur:
             cur.execute("DELETE FROM responses")
 
 
@@ -223,7 +218,7 @@ async def test_thread_lock():
         _lock = threading.Lock()
         sleep_time = 0.01
 
-        # @with_thread_lock
+        @with_thread_lock
         def sleep(self):
             time.sleep(self.sleep_time)
 

@@ -2,45 +2,16 @@
 Adapted from https://raw.githubusercontent.com/obendidi/httpx-cache/main/httpx_cache/transport.py
 in accordance with its BSD-3 license
 """
-from hishel.httpx import SyncCacheTransport
-
 import typing as tp
 
 import httpx
+from hishel.httpx import SyncCacheTransport
 
+from .cache_control import CacheControl
 from .cache_new_2 import TiledCache, create_cache_key
-from .cache_control import ByteStreamWrapper, CacheControl
 from .logger import collect_request, collect_response, log_request, log_response, logger
 from .utils import TiledResponse
 
-
-# class TiledTransport(httpx.BaseTransport):
-#     """Custom transport, implementing caching and custom compression encodings.
-
-#     Args:
-#         transport (optional): an existing httpx transport, if no transport
-#             is given, defaults to an httpx.HTTPTransport with default args.
-#         cache (optional): cache to use with this transport, defaults to
-#             httpx_cache.DictCache
-#         cacheable_methods: methods that are allowed to be cached, defaults to ['GET']
-#         cacheable_status_codes: status codes that are allowed to be cached,
-#             defaults to: (200, 203, 300, 301, 308)
-#     """
-
-#     def __init__(self, transport:httpx.BaseTransport, cache):
-#         self.transport = transport
-#         self.cache = cache
-
-#     def handle_request(self, request: httpx.Request) -> httpx.Response:
-#         response = self.transport.handle_request(request)
-#         response.__class__ = TiledResponse
-#         response.request = request
-#         if __debug__:
-#             # Log the actual server traffic, not the cached response.
-#             log_response(response)
-#         collect_request(request)
-#         collect_response(response)
-#         return response
 
 class TiledTransport(httpx.BaseTransport):
     """Custom transport, implementing caching and custom compression encodings.
@@ -83,8 +54,8 @@ class TiledTransport(httpx.BaseTransport):
         else:
             self.transport = httpx.HTTPTransport()
         self.cache = cache
-    
-    # 
+
+    #
     @property
     def cache(self):
         return self._cache
@@ -99,7 +70,8 @@ class TiledTransport(httpx.BaseTransport):
                 next_transport=self.transport,
                 storage=cache,
             )
-    # 
+
+    #
 
     def close(self) -> None:
         self.transport.close()
@@ -128,7 +100,9 @@ class TiledTransport(httpx.BaseTransport):
                         return cached_response
                     if __debug__:
                         logger.debug("Revalidating cached response for: %s", request)
-                    request.headers["If-None-Match"] = cached_response[0].response.headers["ETag"]
+                    request.headers["If-None-Match"] = cached_response[
+                        0
+                    ].response.headers["ETag"]
                 else:
                     if __debug__:
                         logger.debug("Cached response is stale, deleting: %s", request)
@@ -205,11 +179,6 @@ class TiledTransport(httpx.BaseTransport):
         if __debug__:
             collect_response(response)
         return response
-
-
-
-
-
 
 
 # For when we implement an Async client
