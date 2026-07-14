@@ -18,6 +18,7 @@ Write the date in place of the "Unreleased" in the case a new version is release
   `int32 out of range` error from PostgreSQL. Includes an alembic
   migration; SQLite is unaffected (its `INTEGER` affinity already stores
   64-bit values).
+- Modified the alembic templates to generate code consistent with the linter.
 
 
 ## v0.2.13 (2026-07-08)
