@@ -11,17 +11,13 @@ from functools import wraps
 from hashlib import sha256
 from pathlib import Path
 
-from alembic.migration import Iterator
 import platformdirs
-from hishel import ( 
-    Entry,
-    EntryMeta,
-    SyncSqliteStorage,
-)
+from hishel import Entry, EntryMeta, SyncSqliteStorage
 from httpcore import Request, Response
 
 from .logger import logger
 
+# TODO I believe this would stay as 2 since Nate's version wasn't pushed to GitHub and used but double check.
 CACHE_DATABASE_SCHEMA_VERSION = 2
 
 # This is currently only used for checking SQlite thread-safety
@@ -54,21 +50,25 @@ class ThreadingMode(enum.IntEnum):
     MULTI_THREAD = 1
     SERIALIZED = 3
 
+# TODO: delete create_cache_key?
+# def create_cache_key(request: Request, body: bytes = b"") -> str:
+#     """
+#     Generate a Cache key. A Cache key contains the method, url, and request body.
+#     :param request: An HTTP request
+#     :type request: httpcore.Request
+#     :param body: The body of the request. To be included for e.g. POST
+#     :type body: tp.Optional[bytes]
+#     """
+#     # SyncCacheTransport uses SyncCacheProxy which has _get_key_for_request
+#     # to make its keys. perhaps we just use that?
+#     # I think that's what it automatically does so this doesn't even run to make a key
+#     method = request.method.upper().encode()
+#     url = request.url
+#     hasher = sha256()
+#     hasher.update(body)
+#     body_hashed = hasher.hexdigest()
+#     return f"{method}|{url}|{body_hashed}"
 
-def create_cache_key(request: Request, body: bytes = b"") -> str:
-    """
-    Generate a Cache key. A Cache key contains the method, url, and request body.
-    :param request: An HTTP request
-    :type request: httpcore.Request
-    :param body: The body of the request. To be included for e.g. POST
-    :type body: tp.Optional[bytes]
-    """
-    method = request.method.upper().encode()
-    url = request.url
-    hasher = sha256()
-    hasher.update(body)
-    body_hashed = hasher.hexdigest()
-    return f"{method}|{url}|{body_hashed}" 
 
 # FIxxxxxx
 # TODO, test to see if handling streams right
@@ -76,28 +76,24 @@ def create_cache_key(request: Request, body: bytes = b"") -> str:
 # the read() is consuming the stream and then causing a problem with when the stream table
 # is trying to be made in the parent
 
+
 # Idea: To deal with the stream, can check the size as it's saving
 # and then if it ever becomes too large, stop writing the stream
-# to the streams table and delete the partial entry that hs been 
+# to the streams table and delete the partial entry that hs been
 # started to be saved
 def measure_entry_size(request, response):
     # httpcore exception that is == httpx.ResponseNotRead()
     # Trace out the way this works for a streaming response
     # Also handle streaming request
-    size=0 #TODO delete
-    
-    if hasattr(response, "headers") and "content-length" in response.headers:
-        size = int(response.headers["content-length"])
+    size = 0  # TODO delete
 
-    # TODO: how to do this for request?
-    # if request.body:  
-    #     size += len(
-    #         request.body
-    #     )  
-    # elif stream_size is None:
-    #     raise Exception
-    # else:
-    #     size += stream_size
+    if hasattr(response, "headers") and "content-length" in response.headers:
+        size += int(response.headers["content-length"])
+
+    #TODO: see if this is actually right for request
+    if hasattr(request, "headers") and "content-length" in request.headers:
+        size += int(request.headers["content-length"])
+
     return size
 
 
@@ -335,18 +331,6 @@ class TiledCache(SyncSqliteStorage):
         if not self.write_safe():
             raise RuntimeError("Write is not safe from another thread")
         with self._lock, closing(self.connection.cursor()) as cursor:
-            # if isinstance(response.stream, (tp.Iterator, tp.Iterable)):
-            #     # print(f"HERE: {response.stream}")
-            #     # print(dir(response.stream))
-            #     stream = self._save_stream(response.stream, pair_id.bytes)
-            #     (stream_size,) = cursor.execute(
-            #         "SELECT SUM(LENGTH(chunk_data)) FROM streams WHERE entry_id = ?",
-            #         (pair_id.bytes,),
-            #     ).fetchone()  # adds all the lengths together in bytes from blob
-
-            # stream_size = stream_size or 0
-            # print(stream_size)
-
             # Check the size of the request and response
             # SizeFilter
             # REDIS verison has max_stream_size.. don't see for SQL thoguh
@@ -371,13 +355,16 @@ class TiledCache(SyncSqliteStorage):
                 request=request, response=response, key=key, id_=id_
             )  # this should handle the stream table
 
-            # This accumulated_size_state was made into a dict so that both request and response can 
-            # access it and so we know if the exceed handled already so 
+            # This accumulated_size_state was made into a dict so that both request and response can
+            # access it and so we know if the exceed handled already so
             # that logic doesn't keep running as the stream finishes out
             accumulated_size_state = {"size": 0, "exceed_handled": False}
-            parent_entry.request._stream  = self._available_bytes(parent_entry.id, parent_entry.request._iter_stream(),  accumulated_size_state)
-            parent_entry.response._stream = self._available_bytes(parent_entry.id, parent_entry.response._iter_stream(), accumulated_size_state)
-
+            parent_entry.request.stream = self._check_max_stream_bytes(
+                parent_entry.id, parent_entry.request.stream, accumulated_size_state
+            )
+            parent_entry.response.stream = self._check_max_stream_bytes(
+                parent_entry.id, parent_entry.response.stream, accumulated_size_state
+            )
             # next(parent_entry.response.stream)
 
             # So save_stream uses a generator, and then as data is needed it
@@ -389,20 +376,20 @@ class TiledCache(SyncSqliteStorage):
             # This is confirmed with next(parent_entry.response.stream)
 
             # TODO stream_size shouldn't be like this...
-                # just raise an exception?
-                #  Instead of caching the whole item, use strategies like compression, pagination, chunking, or bypassing the cache entirely for large assets\
-                # Pagination idea: Different pages of information?
-                # Compression: is it reasonable to compress something so large into 1 byte (or other edge cases)? I feel like this is a stretch
-                # Chunking: Splitting it up into multiple entries, but I feel like that wouldn't work for edge cases such as what we're testing here
-                # Bypassing: this would be the skipping it I believe.
-                # https://medium.com/but-it-works-on-my-machine/caching-101-what-not-to-cache-and-why-9fcd346cd535
-                # I think the issue with the exception is anytime it tries to cache and it's too large it'll raise an exception
-                # instead of just continuing without it being cached
-                # raise ValueError(f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)")
-                # same notes as above except for the save_stream thing, TODO look into that make sure it won't be a problem
+            # just raise an exception?
+            #  Instead of caching the whole item, use strategies like compression, pagination, chunking, or bypassing the cache entirely for large assets\
+            # Pagination idea: Different pages of information?
+            # Compression: is it reasonable to compress something so large into 1 byte (or other edge cases)? I feel like this is a stretch
+            # Chunking: Splitting it up into multiple entries, but I feel like that wouldn't work for edge cases such as what we're testing here
+            # Bypassing: this would be the skipping it I believe.
+            # https://medium.com/but-it-works-on-my-machine/caching-101-what-not-to-cache-and-why-9fcd346cd535
+            # I think the issue with the exception is anytime it tries to cache and it's too large it'll raise an exception
+            # instead of just continuing without it being cached
+            # raise ValueError(f"Cache declined entry which is too large: {incoming_size} > {self.max_item_size} (bytes)")
+            # same notes as above except for the save_stream thing, TODO look into that make sure it won't be a problem
 
-                # Now that the parent was called, account for the additional table entries.
-                # the entries will just be Null to start with since parent didn't set them, so just have to update
+            # Now that the parent was called, account for the additional table entries.
+            # the entries will just be Null to start with since parent didn't set them, so just have to update
 
             entry = Entry(
                 id=parent_entry.id,
@@ -411,7 +398,7 @@ class TiledCache(SyncSqliteStorage):
                 meta=parent_entry.meta,
                 cache_key=parent_entry.cache_key,
             )
-            
+
             cursor.execute(
                 "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
                 (request_and_response_size, datetime.now().timestamp(), entry.id.bytes),
@@ -431,8 +418,7 @@ class TiledCache(SyncSqliteStorage):
                     uuid.UUID(bytes=entry_id)
                 )  # this is to soft delete in case stream is still being read
                 # The uuid.UUID(bytes=) stuff is because hishel expects a UUID and wants to convert it to bytes itself
-                # cursor.execute("DELETE FROM entries WHERE id = ?", [entry_id])
-                # cursor.execute("DELETE FROM streams WHERE entry_id = ?", [entry_id])
+                # TODO: need to delete from streams?
                 total_size -= size
 
             # Missing from new: body (i don't think we need body 'cause hishel is handling streaming), is_stream(separate table?), encoding (perhaps just default to ascii on everything?, size, time_last_accessed)
@@ -465,50 +451,44 @@ class TiledCache(SyncSqliteStorage):
             self._remove_expired_caches()
         return entry
 
-    # Generator to keep track of how many bytes were streamed to ensure 
+    # Generator to keep track of how many bytes were streamed to ensure
     # entry remains under the max entry size for the cache.
     # If the entry exceeds, it is deleted from the cache but the stream continues.
-    # 
-    def _available_bytes(self, entry_id, stream_iterator, accumulated_size_state):
-        
+    #
+    def _check_max_stream_bytes(self, entry_id, stream_iterator, accumulated_size_state):
         for chunk in stream_iterator:
             accumulated_size_state["size"] += len(chunk)
-
-
-        # Below deletes the entry when too large
-            if accumulated_size_state["size"] > self.max_item_size:
-                if not accumulated_size_state["exceed_handled"]:
-                    self.remove_entry(
-                        entry_id
-                    )  # This is only a soft delete, hishel needs to run the cleanup before it actually deletes
-                    with self._lock, closing(self.connection.cursor()) as cursor:
-
-                        cursor.execute(
-                            "DELETE FROM entries WHERE id = ?", (entry_id.bytes,)
-                        )  # TODO: is it even necessary to have the soft delete in the parent when we have this delete here? It might be redundant
-                        cursor.execute(
-                            "DELETE FROM streams WHERE entry_id = ?",
-                            (entry_id.bytes,),
-                        )
-
+            if not accumulated_size_state["exceed_handled"]:
+                # Below deletes the entry when too large
+                if accumulated_size_state["size"] > self.max_item_size:
+                    accumulated_size_state["exceed_handled"] = True
+                    self.remove_entry(entry_id)  # This soft deletes for the entry table
                     logger.debug(
                         f"Cache declined entry which is too large with stream: > {self.max_item_size} (bytes)"
                     )
-            else:
-                # should the size in entries include the size of the streamed chunks?
-                with self._lock, closing(self.connection.cursor()) as cursor:
-                    cursor.execute(
-                        "UPDATE entries SET size = ? WHERE id = ?",
-                        (accumulated_size_state["size"], entry_id.bytes),
-                    )
-            #TODO: consider adding LRU eviction in case adding the stream exceeds the max cache size.
+                else:
+                    # should the size in entries include the size of the streamed chunks?
+                    with self._lock, closing(self.connection.cursor()) as cursor:
+                        cursor.execute(
+                            "UPDATE entries SET size = ? WHERE id = ?",
+                            (accumulated_size_state["size"], entry_id.bytes),
+                        )
+                        self.connection.commit()
+            # TODO: consider adding LRU eviction in case adding the stream exceeds the max cache size.
             # However, this could be problematic if the stream becomes deleted later because the entry
             # itself is too large, than we are evicting when we didn't need to
-            yield chunk  
+            yield chunk
 
+            if accumulated_size_state["exceed_handled"]:
+                # This deletes from streams after generator finishes. Does this after
+                # generator finishes because chunks are written lazily
+                with self._lock, closing(self.connection.cursor()) as cursor:
+                    cursor.execute(
+                        "DELETE FROM streams WHERE entry_id = ?",
+                        (entry_id.bytes,),
+                    )
+                    self.connection.commit()
 
-    
-    
     @with_thread_lock
     def get_entries(self, key: str) -> tp.List[Entry]:
         """
@@ -607,16 +587,17 @@ class TiledCache(SyncSqliteStorage):
         if self.default_ttl is None:
             return
         with self._lock, closing(self.connection.cursor()) as cursor:
-            cursor.execute(
-                "DELETE FROM entries WHERE created_at + ? < ?",
+            entry_ids = cursor.execute(
+                "SELECT id FROM entries WHERE created_at + ? < ?",
                 [self.default_ttl, datetime.now().timestamp()],
-            )
-            # TODO: check if streams has a created_at for this
-            # cursor.execute(
-            #     "DELETE FROM streams WHERE created_at + ? < ?",
-            #     [self.default_ttl, datetime.now().timestamp()],
-            # )
-            self.connection.commit()
+            ).fetchall()
+            for (entry_id,) in entry_ids:
+                self.remove_entry(uuid.UUID(bytes=entry_id))
+                # TODO: should this be soft deleted for streams?
+                cursor.execute(
+                    "DELETE FROM streams WHERE entry_id = ?",
+                    [entry_id],
+                )
 
     @with_thread_lock
     def clear(self):
@@ -630,8 +611,8 @@ class TiledCache(SyncSqliteStorage):
                 "Cannot clear cache from a different thread than the one it was created on"
             )
         with self._lock, closing(self.connection.cursor()) as cursor:
-            cursor.execute("DELETE FROM entries")
             cursor.execute("DELETE FROM streams")
+            cursor.execute("DELETE FROM entries") #TODO: should this be soft deleted?
             self.connection.commit()
 
     def size(self):
@@ -643,7 +624,9 @@ class TiledCache(SyncSqliteStorage):
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         with self._lock, closing(self.connection.cursor()) as cursor:
-            (total_size,) = cursor.execute("SELECT SUM(size) FROM entries").fetchone()
+            (total_size,) = cursor.execute(
+                "SELECT SUM(size) FROM entries WHERE deleted_at is NULL"
+            ).fetchone()
         return total_size or 0  # if empty, total_size is None
 
     def count(self):

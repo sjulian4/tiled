@@ -818,6 +818,7 @@ class Context:
         else:
             self.http_client.headers["Authorization"] = f"Apikey {api_key}"
 
+    # TODO: delete?
     @property
     def cache(self):
         return self.http_client._transport.cache
