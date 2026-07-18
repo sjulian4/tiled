@@ -5,11 +5,11 @@ in accordance with its BSD-3 license
 import typing as tp
 
 import httpx
-from hishel.httpx import SyncCacheTransport
 from hishel import CacheOptions, SpecificationPolicy
+from hishel.httpx import SyncCacheTransport
 
 from .cache_new_2 import TiledCache
-from .logger import collect_request, collect_response, log_request, log_response, logger
+from .logger import collect_request, collect_response, log_request, log_response
 from .utils import TiledResponse
 
 
@@ -50,7 +50,7 @@ class TiledTransport(httpx.BaseTransport):
             self.transport = httpx.HTTPTransport(limits=limits)
         else:
             self.transport = httpx.HTTPTransport()
-        self.cache = cache #This sets the cache from the cache.setter below
+        self.cache = cache  # This sets the cache from the cache.setter below
 
     # The two functions below are also in context, but this fixes the bugs from pytests
     @property
@@ -63,9 +63,11 @@ class TiledTransport(httpx.BaseTransport):
         self._cache = cache
         if cache is None:
             self._active_transport = self.transport
-        else: 
-            self._active_transport = SyncCacheTransport( #wrapper so we can use the Hishel transport. Handles writing etc for us
-                policy=SpecificationPolicy(cache_options=CacheOptions(supported_methods=self.cacheable_methods)),  #TODO: do we need to account for cacheable_status_codes and always_cache
+        else:
+            self._active_transport = SyncCacheTransport(  # wrapper so we can use the Hishel transport. Handles writing etc for us
+                policy=SpecificationPolicy(
+                    cache_options=CacheOptions(supported_methods=self.cacheable_methods)
+                ),  # TODO: do we need to account for cacheable_status_codes and always_cache
                 next_transport=self.transport,
                 storage=cache,
             )
@@ -76,12 +78,11 @@ class TiledTransport(httpx.BaseTransport):
             self.cache.close()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        
         # Call original transport
         if __debug__:
             log_request(request)
             collect_request(request)
-        response = self._active_transport.handle_request(request) 
+        response = self._active_transport.handle_request(request)
         response.__class__ = TiledResponse
         response.request = request
         if __debug__:
