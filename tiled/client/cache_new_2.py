@@ -371,13 +371,12 @@ class TiledCache(SyncSqliteStorage):
     ) -> Entry:
         if not self._setup_completed:
             self._setup()
-        if not self.get_entries(
-            key=key
-        ):  
+        entries = self.get_entries(key=key)
+        if not entries:  
             # Prevents any possibility of there being multiple entries on a cache hit.
             entry = self._create_entry(request, response, key, id_)
         else:
-            return self.get_entries(key=key)[0]
+            return entries[0]
         if (
             entry is not None
         ):  # This is in the event that the entry we are trying to cache is too large and cannot be cached
