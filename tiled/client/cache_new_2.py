@@ -462,10 +462,10 @@ class TiledCache(SyncSqliteStorage):
         parent_entries = super().get_entries(key=key)
 
         if not parent_entries:
-            logger.info(f"Cache miss: {key}")
+            # logger.info(f"Cache miss: {key}")
             return []
-        else:
-            logger.info(f"Cache hit: {key}")
+        # else:
+            # logger.info(f"Cache hit: {key}")
 
         with self._lock, closing(self.connection.cursor()) as cursor:
             entries = []

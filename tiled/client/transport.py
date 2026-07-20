@@ -9,7 +9,7 @@ from hishel import CacheOptions, SpecificationPolicy
 from hishel.httpx import SyncCacheTransport
 
 from .cache_new_2 import TiledCache
-from .logger import collect_request, collect_response, log_request, log_response
+from .logger import logger, collect_request, collect_response, log_request, log_response
 from .utils import TiledResponse
 
 
@@ -42,6 +42,7 @@ class TiledTransport(httpx.BaseTransport):
             httpx.codes.PERMANENT_REDIRECT,
         ),
         always_cache: bool = False,
+        shared: bool = True
     ):
         self.cacheable_methods = cacheable_methods
         if transport is not None:
@@ -50,7 +51,9 @@ class TiledTransport(httpx.BaseTransport):
             self.transport = httpx.HTTPTransport(limits=limits)
         else:
             self.transport = httpx.HTTPTransport()
+        self.shared = shared
         self.cache = cache  # This sets the cache from the cache.setter below
+        
 
     # The two functions below are also in context, but this fixes the bugs from pytests
     @property
@@ -66,7 +69,7 @@ class TiledTransport(httpx.BaseTransport):
         else:
             self._active_transport = SyncCacheTransport(  # wrapper so we can use the Hishel transport. Handles writing etc for us
                 policy=SpecificationPolicy(
-                    cache_options=CacheOptions(supported_methods=self.cacheable_methods)
+                    cache_options=CacheOptions(supported_methods=self.cacheable_methods, shared=self.shared)
                 ),  # TODO: do we need to account for cacheable_status_codes and always_cache
                 next_transport=self.transport,
                 storage=cache,
@@ -85,11 +88,17 @@ class TiledTransport(httpx.BaseTransport):
         response = self._active_transport.handle_request(request)
         response.__class__ = TiledResponse
         response.request = request
+        if self.cache is not None:
+            from_cache = False
+            from_cache = response.extensions.get("hishel_from_cache")
+            if from_cache:
+                logger.info("Cache hit")
+            else:
+                logger.info("Cache miss")
         if __debug__:
             # Log the actual server traffic, not the cached response.
             log_response(response)
             # But, below _collect_ the response with the content in it.
-        if __debug__:
             collect_response(response)
         return response
 
