@@ -217,7 +217,7 @@ class TiledCache(SyncSqliteStorage):
         self._capacity = capacity
         self._max_item_size = max_item_size
         self._readonly = readonly
-        if setup_completed: # TODO: what is the point of this, because nothing happens in _setup if setup_completed is true
+        if setup_completed:
             self._setup()
 
     @property
@@ -336,7 +336,8 @@ class TiledCache(SyncSqliteStorage):
                 (request_and_response_size, datetime.now().timestamp(), entry.id.bytes),
             )  # entry.id.bytes uses the UUID to find the right entry, converting to BLOB
 
-            # TODO: does there need to be a commit up here to put this in to effect for LRU eviction?
+            # TODO: does there need to be a commit up here to put this in to effect for LRU eviction? I assume no since
+            # it would be the most recentely used entry
 
             (total_size,) = cursor.execute(
                 "SELECT SUM(size) FROM entries WHERE deleted_at is NULL"
@@ -445,14 +446,13 @@ class TiledCache(SyncSqliteStorage):
 
     @with_thread_lock
     def get_entries(self, key: str) -> tp.List[Entry]:
-        # TODO: update description
         """
         Retreive a response from the cache according to the provided key.
 
         :param key: The key which identifies the entry in the cache
         :type key: str
-        :return: An HTTP response and its HTTP request.
-        :rtype: tp.Optional[StoredResponse]
+        :return: A list of cached entries.
+        :rtype: tp.List[Entry]
         """
         if not self._setup_completed:
             self._setup()
@@ -502,7 +502,7 @@ class TiledCache(SyncSqliteStorage):
         if self.connection is None or not self._setup_completed:
             raise RuntimeError("Cache is not connected")
         if not self.readonly:
-            # TODO: do we need to do the size check here again?
+            # TODO: do we need to do the size check here again? since the entry is being updated
             completed_entry = super().update_entry(id=id, new_pair=new_entry)
             # note for understanding, in the parent update_entry, the "data" is the Entry object
             with self._lock:
