@@ -406,10 +406,12 @@ class TiledCache(SyncSqliteStorage):
                     with self._lock, closing(self.connection.cursor()) as cursor:
                         # would the fact that it's writing after every chunk be a problem b/c there are so many writes?
                         # Should the time last accessed be updated whenever a stream chunk is written?
+                        
                         cursor.execute(
-                            "UPDATE entries SET size = COALESCE(size,0) + ?, time_last_accessed = ? WHERE id = ?",
-                            (len(chunk), datetime.now().timestamp(),entry_id.bytes),
+                            "UPDATE entries SET size = ?, time_last_accessed = ? WHERE id = ?",
+                            (accumulated_size_state["size"], datetime.now().timestamp(),entry_id.bytes),
                         )
+
                         self.connection.commit()
 
 
