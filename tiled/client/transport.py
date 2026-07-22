@@ -9,19 +9,18 @@ from hishel import CacheOptions, SpecificationPolicy
 from hishel.httpx import SyncCacheTransport
 
 from .cache_new_2 import TiledCache
-from .logger import logger, collect_request, collect_response, log_request, log_response
+from .logger import collect_request, collect_response, log_request, log_response, logger
 from .utils import TiledResponse
 
 
 class TiledTransport(httpx.BaseTransport):
     # TODO update message up here
-    """Custom transport, implementing caching and custom compression encodings.
+    """Custom transport, implementing caching.
 
     Args:
         transport (optional): an existing httpx transport, if no transport
             is given, defaults to an httpx.HTTPTransport with default args.
-        cache (optional): cache to use with this transport, defaults to
-            httpx_cache.DictCache
+        cache (optional): cache to use with this transport.
         cacheable_methods: methods that are allowed to be cached, defaults to ['GET']
         cacheable_status_codes: status codes that are allowed to be cached,
             defaults to: (200, 203, 300, 301, 308)
@@ -42,7 +41,7 @@ class TiledTransport(httpx.BaseTransport):
             httpx.codes.PERMANENT_REDIRECT,
         ),
         always_cache: bool = False,
-        shared: bool = True
+        shared: bool = True,
     ):
         self.cacheable_methods = cacheable_methods
         if transport is not None:
@@ -53,7 +52,6 @@ class TiledTransport(httpx.BaseTransport):
             self.transport = httpx.HTTPTransport()
         self.shared = shared
         self.cache = cache  # This sets the cache from the cache.setter below
-        
 
     # The two functions below are also in context, but this fixes the bugs from pytests
     @property
@@ -69,7 +67,9 @@ class TiledTransport(httpx.BaseTransport):
         else:
             self._active_transport = SyncCacheTransport(  # wrapper so we can use the Hishel transport. Handles writing etc for us
                 policy=SpecificationPolicy(
-                    cache_options=CacheOptions(supported_methods=self.cacheable_methods, shared=self.shared)
+                    cache_options=CacheOptions(
+                        supported_methods=self.cacheable_methods, shared=self.shared
+                    )
                 ),  # TODO: do we need to account for cacheable_status_codes and always_cache
                 next_transport=self.transport,
                 storage=cache,
@@ -103,6 +103,7 @@ class TiledTransport(httpx.BaseTransport):
         return response
 
 
+# TODO: this needs to be updated for the new client-side cache with Hishel
 # For when we implement an Async client
 #
 # class AsyncCacheControlTransport(httpx.AsyncBaseTransport):
